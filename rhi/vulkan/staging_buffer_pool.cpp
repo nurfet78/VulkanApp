@@ -5,6 +5,58 @@
 #include <algorithm>
 
 namespace RHI::Vulkan {
+	
+StagingBufferPool::StagingBufferPool(Device* device) 
+    : m_device(device) {
+    if (!m_device) {
+        throw std::runtime_error("Device cannot be null for StagingBufferPool");
+    }
+}
+
+StagingBufferPool::~StagingBufferPool() noexcept {
+    std::lock_guard lock(m_mutex);
+    m_pools.clear();
+}
+
+void StagingBufferPool::UploadData(CommandPool* commandPool, Buffer* dstBuffer,
+                                   const void* data, size_t size, size_t dstOffset) {
+    // Получаем staging буфер
+    Buffer* stagingBuffer = AcquireBuffer(size);
+    
+    // Загружаем данные в staging
+    stagingBuffer->Upload(data, size);
+    
+    // Копируем в целевой буфер используя переданный CommandPool
+    VkCommandBuffer cmd = commandPool->AllocateCommandBuffer();
+    
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    dstBuffer->CopyFrom(cmd, stagingBuffer, size, 0, dstOffset);
+    vkEndCommandBuffer(cmd);
+    
+    // Submit и ожидание
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    
+    VkFence fence;
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence);
+    
+    m_device->SubmitTransfer(&submitInfo, fence);
+    vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+    
+    vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+    commandPool->FreeCommandBuffer(cmd);
+    
+    // Освобождаем staging буфер
+    ReleaseBuffer(stagingBuffer);
+}
 
 void StagingBufferPool::Shutdown() {
     std::lock_guard lock(m_mutex);

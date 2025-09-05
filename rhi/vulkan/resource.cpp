@@ -70,18 +70,46 @@ VkDeviceAddress Buffer::GetDeviceAddress() const {
 
 // Добавить этот метод в существующий класс Buffer в resource.cpp
 
-void Buffer::CopyFrom(Buffer* srcBuffer, VkDeviceSize size, VkDeviceSize srcOffset, VkDeviceSize dstOffset) {
-    // Use CommandPoolManager for efficiency
-    CommandPoolManager poolManager(m_device);
-    VkCommandBuffer cmd = poolManager.BeginSingleTimeCommands();
-    
+// Buffer::CopyFrom - теперь принимает командный буфер
+void Buffer::CopyFrom(VkCommandBuffer cmd, Buffer* srcBuffer, VkDeviceSize size,
+                     VkDeviceSize srcOffset, VkDeviceSize dstOffset) {
     VkBufferCopy copyRegion{};
     copyRegion.srcOffset = srcOffset;
     copyRegion.dstOffset = dstOffset;
     copyRegion.size = size;
     vkCmdCopyBuffer(cmd, srcBuffer->m_buffer, m_buffer, 1, &copyRegion);
+}
+
+// Buffer::CopyFromImmediate - для совместимости, принимает CommandPool
+void Buffer::CopyFromImmediate(CommandPool* pool, Buffer* srcBuffer, VkDeviceSize size,
+                              VkDeviceSize srcOffset, VkDeviceSize dstOffset) {
+    // Получаем командный буфер из переданного пула
+    VkCommandBuffer cmd = pool->AllocateCommandBuffer();
     
-    poolManager.EndSingleTimeCommands(cmd);
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    CopyFrom(cmd, srcBuffer, size, srcOffset, dstOffset);
+    vkEndCommandBuffer(cmd);
+    
+    // Submit через device (нужно будет передать fence)
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    
+    VkFence fence;
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence);
+    
+    m_device->SubmitTransfer(&submitInfo, fence);
+    vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+    
+    vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+    pool->FreeCommandBuffer(cmd);
 }
 
 // Image implementation
@@ -209,7 +237,8 @@ Sampler::~Sampler() {
 }
 
 // Mesh implementation
-void Mesh::UploadToGPU(Device* device) {
+void Mesh::UploadToGPU(Device* device, CommandPool* commandPool, 
+                       StagingBufferPool* stagingPool) {
     VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertices.size();
     VkDeviceSize indexBufferSize = sizeof(uint32_t) * indices.size();
     
@@ -226,24 +255,20 @@ void Mesh::UploadToGPU(Device* device) {
         VMA_MEMORY_USAGE_GPU_ONLY
     );
     
-    // Use staging buffer pool for efficient uploads
-    auto& pool = StagingBufferPool::Get();
-    
-    // Upload vertices
-    Buffer* stagingVertex = pool.AcquireBuffer(vertexBufferSize);
-    stagingVertex->Upload(vertices.data(), vertexBufferSize);
-    vertexBuffer->CopyFrom(stagingVertex, vertexBufferSize);
-    pool.ReleaseBuffer(stagingVertex);
-    
-    // Upload indices
-    Buffer* stagingIndex = pool.AcquireBuffer(indexBufferSize);
-    stagingIndex->Upload(indices.data(), indexBufferSize);
-    indexBuffer->CopyFrom(stagingIndex, indexBufferSize);
-    pool.ReleaseBuffer(stagingIndex);
+    // Используем переданный staging pool
+    stagingPool->UploadData(commandPool, vertexBuffer.get(), 
+                            vertices.data(), vertexBufferSize);
+    stagingPool->UploadData(commandPool, indexBuffer.get(), 
+                            indices.data(), indexBufferSize);
 }
 
 // ResourceManager implementation
-ResourceManager::ResourceManager(Device* device) : m_device(device) {
+ResourceManager::ResourceManager(Device* device, CommandPool* transferPool) 
+    : m_device(device), m_transferPool(transferPool) {
+    
+    // Создаем свой экземпляр staging pool
+    m_stagingPool = std::make_unique<StagingBufferPool>(device);
+    
     m_defaultSampler = std::make_unique<Sampler>(device);
     CreateDefaultTextures();
     CreatePrimitiveMeshes();
@@ -259,13 +284,17 @@ void ResourceManager::CreatePrimitiveMeshes() {
     CreateConeMesh();
 }
 
-Mesh* ResourceManager::CreateMesh(const std::string& name, const std::vector<Vertex>& vertices, 
-                                 const std::vector<uint32_t>& indices) {
+// ResourceManager::CreateMesh обновлен
+Mesh* ResourceManager::CreateMesh(const std::string& name, 
+                                  const std::vector<Vertex>& vertices, 
+                                  const std::vector<uint32_t>& indices) {
     auto mesh = std::make_unique<Mesh>();
     mesh->vertices = vertices;
     mesh->indices = indices;
     mesh->CalculateBounds();
-    mesh->UploadToGPU(m_device);
+    
+    // Используем наши пулы
+    mesh->UploadToGPU(m_device, m_transferPool, m_stagingPool.get());
     
     Mesh* ptr = mesh.get();
     m_meshes[name] = std::move(mesh);

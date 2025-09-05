@@ -5,6 +5,15 @@
 #include <string>
 #include <functional>
 #include <vector>
+#include <cstdint>
+
+// Forward declarations - не включаем vulkan напрямую
+typedef struct VkInstance_T* VkInstance;
+typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
+typedef enum VkResult {
+    VK_SUCCESS = 0,
+    // ... другие коды результата при необходимости
+} VkResult;
 
 namespace Core {
 
@@ -32,7 +41,7 @@ public:
     uint32_t GetHeight() const { return m_height; }
     float GetAspectRatio() const { return static_cast<float>(m_width) / m_height; }
     
-    // For Vulkan surface creation
+    // Vulkan-специфичные методы - не зависят от Device
     const char** GetRequiredInstanceExtensions(uint32_t* count) const;
     VkResult CreateWindowSurface(VkInstance instance, VkSurfaceKHR* surface) const;
 

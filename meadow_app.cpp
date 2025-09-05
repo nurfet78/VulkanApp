@@ -8,7 +8,8 @@
 #include "rhi/vulkan/swapchain.h"
 #include "rhi/vulkan/command_pool.h"
 #include "rhi/vulkan/pipeline.h"
-#include "rhi/vulkan/staging_buffer_pool.h"
+#include "rhi/vulkan/resource.h"  // Добавлено
+// Убрали: #include "rhi/vulkan/staging_buffer_pool.h"
 #include <iostream>
 #include <iomanip>
 #include <thread>
@@ -32,8 +33,7 @@ void MeadowApp::OnInitialize() {
     // Initialize Vulkan
     m_device = std::make_unique<RHI::Vulkan::Device>(GetWindow(), true);
     
-    // Initialize staging buffer pool
-    RHI::Vulkan::StagingBufferPool::Get().Initialize(m_device.get());
+    // Убрали: RHI::Vulkan::StagingBufferPool::Get().Initialize(m_device.get());
     
     // Create swapchain
     m_swapchain = std::make_unique<RHI::Vulkan::Swapchain>(
@@ -92,12 +92,12 @@ void MeadowApp::OnShutdown() {
         }
     }
     
-    // Cleanup staging buffer pool
-    RHI::Vulkan::StagingBufferPool::Get().Shutdown();
+    // Убрали: RHI::Vulkan::StagingBufferPool::Get().Shutdown();
     
     // Cleanup in reverse order
     DestroySyncObjects();
     m_trianglePipeline.reset();
+	m_resourceManager.reset(); 
     m_commandPoolManager.reset();
     m_swapchain.reset();
     m_device.reset();

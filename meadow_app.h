@@ -10,6 +10,7 @@ namespace RHI::Vulkan {
     class Swapchain;
     class CommandPoolManager;
     class TrianglePipeline;
+	class ResourceManager;  // Добавлено
 }
 
 class MeadowApp : public Core::Application {
@@ -42,6 +43,7 @@ private:
     std::unique_ptr<RHI::Vulkan::Device> m_device;
     std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
     std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
+	std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;  // Добавлено
     std::unique_ptr<RHI::Vulkan::TrianglePipeline> m_trianglePipeline;
     
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> m_frames;

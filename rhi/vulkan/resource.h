@@ -10,6 +10,8 @@
 namespace RHI::Vulkan {
 
 class Device;
+class CommandPool;
+class StagingBufferPool;  // Добавлено
 
 // Buffer wrapper
 class Buffer {
@@ -20,7 +22,14 @@ public:
     void* Map();
     void Unmap();
     void Upload(const void* data, VkDeviceSize size, VkDeviceSize offset = 0);
-    void CopyFrom(Buffer* srcBuffer, VkDeviceSize size, VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0);
+    
+	// Изменено: Теперь принимает командный буфер извне
+    void CopyFrom(VkCommandBuffer cmd, Buffer* srcBuffer, VkDeviceSize size, 
+                  VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0);
+    
+    // Альтернатива для немедленного копирования с передачей пула
+    void CopyFromImmediate(CommandPool* pool, Buffer* srcBuffer, VkDeviceSize size,
+                          VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0);
     
     VkBuffer GetHandle() const { return m_buffer; }
     VkDeviceSize GetSize() const { return m_size; }
@@ -156,7 +165,9 @@ struct Mesh {
         }
     }
     
-    void UploadToGPU(Device* device);
+    // Изменено: теперь принимает пулы явно
+    void UploadToGPU(Device* device, CommandPool* commandPool, 
+                     StagingBufferPool* stagingPool);
 };
 
 // Material data
@@ -177,12 +188,14 @@ struct Material {
 // Resource Manager
 class ResourceManager {
 public:
-    explicit ResourceManager(Device* device);
+    // Изменено: теперь принимает CommandPool
+    ResourceManager(Device* device, CommandPool* transferPool);
     ~ResourceManager();
     
-    // Mesh management
+    // Mesh management - обновлено
     void CreatePrimitiveMeshes();
-    Mesh* CreateMesh(const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+    Mesh* CreateMesh(const std::string& name, const std::vector<Vertex>& vertices, 
+                    const std::vector<uint32_t>& indices);
     Mesh* GetMesh(const std::string& name);
     
     // Texture management
@@ -201,6 +214,9 @@ public:
     Image* GetBlackTexture() { return GetTexture("black"); }
     Image* GetNormalTexture() { return GetTexture("normal"); }
     
+    // Доступ к staging pool
+    StagingBufferPool* GetStagingPool() { return m_stagingPool.get(); }
+
 private:
     void CreateDefaultTextures();
     Mesh* CreatePlaneMesh();
@@ -210,6 +226,8 @@ private:
     Mesh* CreateConeMesh(uint32_t segments = 32);
     
     Device* m_device;
+    CommandPool* m_transferPool;  // Добавлено
+    std::unique_ptr<StagingBufferPool> m_stagingPool;  // Добавлено
     
     std::unordered_map<std::string, std::unique_ptr<Mesh>> m_meshes;
     std::unordered_map<std::string, std::unique_ptr<Image>> m_textures;

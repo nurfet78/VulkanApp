@@ -32,8 +32,16 @@ void MeadowApp::OnInitialize() {
     
     // Initialize Vulkan
     m_device = std::make_unique<RHI::Vulkan::Device>(GetWindow(), true);
+	
+	m_resourceManager = std::make_unique<RHI::Vulkan::ResourceManager>(
+        m_device.get(), 
+        m_commandPoolManager->GetTransferPool()
+    );
+	
+	if (m_resourceManager) {
+        m_resourceManager->GetStagingPool()->GarbageCollect();
+    }
     
-    // Убрали: RHI::Vulkan::StagingBufferPool::Get().Initialize(m_device.get());
     
     // Create swapchain
     m_swapchain = std::make_unique<RHI::Vulkan::Swapchain>(

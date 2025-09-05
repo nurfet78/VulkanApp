@@ -1,4 +1,7 @@
 // engine/core/time.h
+
+namespace Core {
+	
 class Time {
 public:
     Time();

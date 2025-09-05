@@ -1,0 +1,40 @@
+// engine/rhi/vulkan/vulkan_common.h
+#pragma once
+
+#define VK_NO_PROTOTYPES
+#include <vulkan/vulkan.h>
+#include <volk.h>
+#include <vk_mem_alloc.h>
+
+#include <vector>
+#include <string>
+#include <optional>
+#include <stdexcept>
+
+#define VK_CHECK(x) do { \
+    VkResult result = x; \
+    if (result != VK_SUCCESS) { \
+        throw std::runtime_error(std::string("Vulkan error: ") + #x); \
+    } \
+} while(0)
+
+namespace RHI::Vulkan {
+
+struct QueueFamilyIndices {
+    std::optional<uint32_t> graphics;
+    std::optional<uint32_t> compute;
+    std::optional<uint32_t> transfer;
+    std::optional<uint32_t> present;
+    
+    bool IsComplete() const {
+        return graphics.has_value() && present.has_value();
+    }
+};
+
+struct SwapchainSupportDetails {
+    VkSurfaceCapabilitiesKHR capabilities;
+    std::vector<VkSurfaceFormatKHR> formats;
+    std::vector<VkPresentModeKHR> presentModes;
+};
+
+} // namespace RHI::Vulkan

@@ -1,4 +1,4 @@
-// engine/rhi/vulkan/command_pool.h
+// engine/rhi/vulkan/command_pool.h - ИСПРАВЛЕННАЯ ВЕРСИЯ
 #pragma once
 
 #include "vulkan_common.h"
@@ -51,19 +51,10 @@ public:
     void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
 
 private:
-    // Thread-safe pools wrapper
-    struct ThreadPools {
-        std::unique_ptr<CommandPool> graphics;
-        std::unique_ptr<CommandPool> compute;
-        std::unique_ptr<CommandPool> transfer;
-        
-        ~ThreadPools() noexcept = default;
-    };
-    
     Device* m_device;
     std::unique_ptr<CommandPool> m_transferPool;
     
-    static thread_local ThreadPools t_pools;
+    // Note: Thread-local pools are managed in the .cpp file
 };
 
 } // namespace RHI::Vulkan

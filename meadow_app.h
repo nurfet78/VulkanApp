@@ -1,16 +1,26 @@
-// meadow_app.h
+// Refactored MeadowApp
+// meadow_app.h - REFACTORED VERSION
 #pragma once
 
 #include "core/application.h"
 #include <memory>
-#include <array>
 
-namespace RHI::Vulkan {
-    class Device;
-    class Swapchain;
-    class CommandPoolManager;
-    class TrianglePipeline;
-	class ResourceManager;  // Добавлено
+namespace Renderer {
+    class RenderContext;
+    class FrameManager;
+    class SceneRenderer;
+}
+
+namespace Scene {
+    class World;
+}
+
+namespace Physics {
+    class PhysicsWorld;
+}
+
+namespace World {
+    class MeadowScene;
 }
 
 class MeadowApp : public Core::Application {
@@ -25,32 +35,17 @@ protected:
     void OnRender() override;
 
 private:
-    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+    // Core systems
+    std::unique_ptr<Renderer::RenderContext> m_renderContext;
+    std::unique_ptr<Renderer::FrameManager> m_frameManager;
+    std::unique_ptr<Renderer::SceneRenderer> m_sceneRenderer;
     
-    struct FrameData {
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
-        VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
-        VkFence inFlightFence = VK_NULL_HANDLE;
-    };
+    // Game systems
+    std::unique_ptr<Scene::World> m_sceneWorld;
+    std::unique_ptr<Physics::PhysicsWorld> m_physicsWorld;
+    std::unique_ptr<World::MeadowScene> m_meadowScene;
     
-    void RecreateSwapchain();
-    void DrawFrame();
-    void CreateSyncObjects();
-    void DestroySyncObjects();
-    void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
-    
-    std::unique_ptr<RHI::Vulkan::Device> m_device;
-    std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
-    std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
-	std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;  // Добавлено
-    std::unique_ptr<RHI::Vulkan::TrianglePipeline> m_trianglePipeline;
-    
-    std::array<FrameData, MAX_FRAMES_IN_FLIGHT> m_frames;
-    uint32_t m_currentFrame = 0;
-    uint32_t m_swapchainImageCount = 0;
-    
-    bool m_framebufferResized = false;
+    // Statistics
     float m_totalTime = 0.0f;
     uint32_t m_frameCounter = 0;
     float m_fpsTimer = 0.0f;

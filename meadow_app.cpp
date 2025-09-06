@@ -1,4 +1,4 @@
-// meadow_app.cpp
+// meadow_app.cpp - ИСПРАВЛЕННАЯ ВЕРСИЯ
 #include "meadow_app.h"
 #include "core/window.h"
 #include "core/input.h"
@@ -8,8 +8,7 @@
 #include "rhi/vulkan/swapchain.h"
 #include "rhi/vulkan/command_pool.h"
 #include "rhi/vulkan/pipeline.h"
-#include "rhi/vulkan/resource.h"  // Добавлено
-// Убрали: #include "rhi/vulkan/staging_buffer_pool.h"
+#include "rhi/vulkan/resource.h"
 #include <iostream>
 #include <iomanip>
 #include <thread>
@@ -30,20 +29,10 @@ MeadowApp::~MeadowApp() noexcept = default;
 void MeadowApp::OnInitialize() {
     std::cout << "Initializing Meadow World..." << std::endl;
     
-    // Initialize Vulkan
+    // 1. Initialize Vulkan Device first
     m_device = std::make_unique<RHI::Vulkan::Device>(GetWindow(), true);
-	
-	m_resourceManager = std::make_unique<RHI::Vulkan::ResourceManager>(
-        m_device.get(), 
-        m_commandPoolManager->GetTransferPool()
-    );
-	
-	if (m_resourceManager) {
-        m_resourceManager->GetStagingPool()->GarbageCollect();
-    }
     
-    
-    // Create swapchain
+    // 2. Create swapchain
     m_swapchain = std::make_unique<RHI::Vulkan::Swapchain>(
         m_device.get(), 
         GetWindow()->GetWidth(), 
@@ -54,16 +43,22 @@ void MeadowApp::OnInitialize() {
     // Store initial image count
     m_swapchainImageCount = m_swapchain->GetImageCount();
     
-    // Create command pool manager
+    // 3. Create command pool manager BEFORE resource manager
     m_commandPoolManager = std::make_unique<RHI::Vulkan::CommandPoolManager>(m_device.get());
     
-    // Create triangle pipeline
+    // 4. NOW create resource manager with valid command pool
+    m_resourceManager = std::make_unique<RHI::Vulkan::ResourceManager>(
+        m_device.get(), 
+        m_commandPoolManager->GetTransferPool()
+    );
+    
+    // 5. Create triangle pipeline
     m_trianglePipeline = std::make_unique<RHI::Vulkan::TrianglePipeline>(
         m_device.get(),
         m_swapchain->GetFormat()
     );
     
-    // Create sync objects and command buffers for each frame
+    // 6. Create sync objects and command buffers for each frame
     CreateSyncObjects();
     
     // Set resize callback
@@ -100,12 +95,10 @@ void MeadowApp::OnShutdown() {
         }
     }
     
-    // Убрали: RHI::Vulkan::StagingBufferPool::Get().Shutdown();
-    
-    // Cleanup in reverse order
+    // Cleanup in REVERSE order of creation
     DestroySyncObjects();
     m_trianglePipeline.reset();
-	m_resourceManager.reset(); 
+    m_resourceManager.reset();  // Destroy before command pool manager
     m_commandPoolManager.reset();
     m_swapchain.reset();
     m_device.reset();
@@ -128,8 +121,10 @@ void MeadowApp::OnUpdate(float deltaTime) {
         m_frameCounter = 0;
         m_fpsTimer = 0.0f;
         
-        // Garbage collect staging buffers periodically
-        RHI::Vulkan::StagingBufferPool::Get().GarbageCollect();
+        // Garbage collect staging buffers periodically - FIXED: use member variable
+        if (m_resourceManager) {
+            m_resourceManager->GetStagingPool()->GarbageCollect();
+        }
     }
     
     // Handle window resize
@@ -258,11 +253,16 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 }
 
 void MeadowApp::DrawFrame() {
-    // Wait for previous frame with same index
+    // Wait for previous frame with same index - WITH TIMEOUT HANDLING
+    constexpr uint64_t FENCE_TIMEOUT = 1000000000; // 1 second in nanoseconds
     VkResult result = vkWaitForFences(m_device->GetDevice(), 1, 
                                       &m_frames[m_currentFrame].inFlightFence, 
-                                      VK_TRUE, UINT64_MAX);
-    if (result != VK_SUCCESS) {
+                                      VK_TRUE, FENCE_TIMEOUT);
+    if (result == VK_TIMEOUT) {
+        std::cerr << "Warning: Fence wait timeout for frame " << m_currentFrame << std::endl;
+        // Could implement recovery logic here
+        return;
+    } else if (result != VK_SUCCESS) {
         std::cerr << "Failed to wait for fence: " << result << std::endl;
         return;
     }

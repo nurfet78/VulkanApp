@@ -1,8 +1,16 @@
-// engine/rhi/vulkan/command_pool.cpp
+// engine/rhi/vulkan/command_pool.cpp - ИСПРАВЛЕННАЯ ВЕРСИЯ
 #include "command_pool.h"
 #include "device.h"
 
 namespace RHI::Vulkan {
+
+// Anonymous namespace for thread-local storage
+namespace {
+    thread_local std::unique_ptr<CommandPool> t_graphicsPool;
+    thread_local std::unique_ptr<CommandPool> t_computePool;
+    thread_local std::unique_ptr<CommandPool> t_transferPool;
+    thread_local Device* t_device = nullptr;
+}
 
 CommandPool::CommandPool(Device* device, uint32_t queueFamily, VkCommandPoolCreateFlags flags)
     : m_device(device) {
@@ -67,11 +75,6 @@ void CommandPool::Reset(VkCommandPoolResetFlags flags) {
     VK_CHECK(vkResetCommandPool(m_device->GetDevice(), m_pool, flags));
 }
 
-// Thread-local storage
-thread_local std::unique_ptr<CommandPool> CommandPoolManager::t_graphicsPool;
-thread_local std::unique_ptr<CommandPool> CommandPoolManager::t_computePool;
-thread_local std::unique_ptr<CommandPool> CommandPoolManager::t_transferPool;
-
 CommandPoolManager::CommandPoolManager(Device* device) : m_device(device) {
     m_transferPool = std::make_unique<CommandPool>(
         device, 
@@ -80,39 +83,43 @@ CommandPoolManager::CommandPoolManager(Device* device) : m_device(device) {
     );
 }
 
-CommandPoolManager::~CommandPoolManager() = default;
+CommandPoolManager::~CommandPoolManager() {
+    // Clean up thread-local pools if this thread created any
+    if (t_device == m_device) {
+        t_graphicsPool.reset();
+        t_computePool.reset();
+        t_transferPool.reset();
+        t_device = nullptr;
+    }
+}
 
 CommandPool* CommandPoolManager::GetGraphicsPool() {
-    if (!t_graphicsPool) {
+    if (!t_graphicsPool || t_device != m_device) {
         t_graphicsPool = std::make_unique<CommandPool>(
             m_device,
             m_device->GetGraphicsQueueFamily(),
             VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
         );
+        t_device = m_device;
     }
     return t_graphicsPool.get();
 }
 
 CommandPool* CommandPoolManager::GetComputePool() {
-    if (!t_computePool) {
+    if (!t_computePool || t_device != m_device) {
         t_computePool = std::make_unique<CommandPool>(
             m_device,
             m_device->GetComputeQueueFamily(),
             VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
         );
+        t_device = m_device;
     }
     return t_computePool.get();
 }
 
 CommandPool* CommandPoolManager::GetTransferPool() {
-    if (!t_transferPool) {
-        t_transferPool = std::make_unique<CommandPool>(
-            m_device,
-            m_device->GetTransferQueueFamily(),
-            VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
-        );
-    }
-    return t_transferPool.get();
+    // Use the shared transfer pool for single-time commands
+    return m_transferPool.get();
 }
 
 VkCommandBuffer CommandPoolManager::BeginSingleTimeCommands() {
@@ -135,16 +142,16 @@ void CommandPoolManager::EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
     
-    // Создаем fence для ожидания
+    // Create fence for waiting
     VkFence fence;
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     VK_CHECK(vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence));
     
-    // Submit с fence вместо vkQueueWaitIdle
+    // Submit with fence instead of vkQueueWaitIdle
     VK_CHECK(m_device->SubmitTransfer(&submitInfo, fence));
     
-    // Ждем конкретную операцию, а не весь queue
+    // Wait for specific operation, not entire queue
     VK_CHECK(vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX));
     
     vkDestroyFence(m_device->GetDevice(), fence, nullptr);

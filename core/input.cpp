@@ -126,3 +126,4 @@ void Input::OnScroll(GLFWwindow* window, double xoffset, double yoffset) {
     if (!s_instance) return;
     s_instance->m_scrollDelta = static_cast<float>(yoffset);
 }
+}

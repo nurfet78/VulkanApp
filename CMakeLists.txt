@@ -1,0 +1,98 @@
+cmake_minimum_required (VERSION 3.20)
+
+project(
+VulkanSandbox
+VERSION     0.1.0
+LANGUAGES   CXX
+)
+
+set(CMAKE_CXX_STANDARD           20)
+set(CMAKE_CXX_STANDARD_REQUIRED  ON)
+set(CMAKE_CXX_EXTENSIONS         OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+
+set(SRC
+main.cpp
+meadow_app.cpp
+
+core/application.cpp
+core/input.cpp
+core/job_system.cpp
+core/time.cpp
+core/window.cpp
+
+physics/collider.cpp
+
+renderer/material_system.cpp
+renderer/shadow_mapper.cpp
+renderer/sky_renderer.cpp
+
+rhi/vulkan/async_resource_loader.cpp
+rhi/vulkan/command_buffer_optimizer.cpp
+rhi/vulkan/command_pool.cpp
+rhi/vulkan/descriptor_allocator.cpp
+rhi/vulkan/device.cpp
+rhi/vulkan/pipeline.cpp
+rhi/vulkan/resource.cpp
+rhi/vulkan/shader_manager.cpp
+rhi/vulkan/staging_buffer_pool.cpp
+rhi/vulkan/swapchain.cpp
+
+world/fps_player.cpp
+world/meadow_scene.cpp
+
+)
+
+add_executable(VulkanSandbox ${SRC})
+
+
+if(NOT DEFINED ENV{VULKAN_SDK})
+message(FATAL_ERROR "Переменная окружения VULKAN_SDK не установлена")
+endif()
+
+find_package(Vulkan REQUIRED)           # даёт импортируемую цель Vulkan::Vulkan
+
+
+target_include_directories(VulkanSandbox
+BEFORE PRIVATE
+${CMAKE_CURRENT_SOURCE_DIR}      # корень
+${CMAKE_CURRENT_SOURCE_DIR}/engine
+${CMAKE_CURRENT_SOURCE_DIR}/core
+${CMAKE_CURRENT_SOURCE_DIR}/renderer
+${CMAKE_CURRENT_SOURCE_DIR}/rhi
+${CMAKE_CURRENT_SOURCE_DIR}/physics
+${CMAKE_CURRENT_SOURCE_DIR}/world
+)
+
+
+target_include_directories(VulkanSandbox
+SYSTEM PRIVATE
+$ENV{VULKAN_SDK}/Include
+$ENV{VULKAN_SDK}/Include/Volk
+$ENV{VULKAN_SDK}/Include/vma
+)
+
+
+target_link_libraries(VulkanSandbox PRIVATE Vulkan::Vulkan)
+
+
+target_link_directories(VulkanSandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/engine/lib)
+target_link_libraries   (VulkanSandbox PRIVATE glfw3  user32 gdi32 shell32)
+
+
+target_compile_definitions(VulkanSandbox PRIVATE NOMINMAX)
+
+if(MSVC)
+target_compile_options(VulkanSandbox
+PRIVATE
+/W4            # высокий уровень предупреждений
+/permissive-   # строгий стандарт
+/EHsc          # корректное исключение/RTTI
+)
+else()
+target_compile_options(VulkanSandbox
+PRIVATE
+-Wall -Wextra -Wpedantic
+)
+endif()

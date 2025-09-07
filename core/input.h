@@ -73,3 +73,4 @@ private:
     
     static Input* s_instance;
 };
+}

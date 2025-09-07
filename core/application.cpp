@@ -1,4 +1,5 @@
 // engine/core/application.cpp
+
 #include <iostream>  // ПЕРЕМЕЩЕНО: до локальных заголовков
 #include "application.h"
 #include "window.h"

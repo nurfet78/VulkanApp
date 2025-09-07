@@ -1,7 +1,3 @@
-C:\Users\Nuri\Desktop\VulkanAPI\engine>cmake --build build -j
-[1/24] Building CXX object CMakeFiles\VulkanSandbox.dir\core\input.cpp.obj
-FAILED: [code=2] CMakeFiles/VulkanSandbox.dir/core/input.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\core\input.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\input.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(100): error C7568: argument list missing after assumed function template 'is_integral_v'
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(100): note: the template instantiation context (the oldest one first) is
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(50): note: while compiling class template 'Core::std::fpos'
@@ -58,8 +54,6 @@ C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.3520
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_string_view.hpp(1391): error C2334: unexpected token(s) preceding ':'; skipping apparent function body
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_string_view.hpp(1800): fatal error C1903: unable to recover from previous error(s); stopping compilation
 [2/24] Building CXX object CMakeFiles\VulkanSandbox.dir\core\window.cpp.obj
-FAILED: [code=2] CMakeFiles/VulkanSandbox.dir/core/window.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\core\window.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\window.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\memory(4053): error C7568: argument list missing after assumed function template '_Locked_pointer'
@@ -213,11 +207,7 @@ C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.3520
         [
             _InIt=std::istreambuf_iterator<wchar_t,std::char_traits<wchar_t>>
         ]
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocmon(310): note: see declaration of 'std::money_get<wchar_t,std::istreambuf_iterator<wchar_t,std::char_traits<wchar_t>>>::get'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocmon(315): fatal error C1003: error count exceeds 100; stopping compilation
-[3/24] Building CXX object CMakeFiles\VulkanSandbox.dir\core\job_system.cpp.obj
-FAILED: [code=2] CMakeFiles/VulkanSandbox.dir/core/job_system.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\core\job_system.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\job_system.cpp
+
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(83): error C7568: argument list missing after assumed function template 'ratio'
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(84): error C2039: 'duration': is not a member of 'std::chrono'
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(80): note: see declaration of 'std::chrono'
@@ -333,9 +323,33 @@ C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.3520
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(293): error C4430: missing type specifier - int assumed. Note: C++ does not support default-int
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(293): error C2143: syntax error: missing ',' before '&'
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(293): fatal error C1003: error count exceeds 100; stopping compilation
-[4/24] Building CXX object CMakeFiles\VulkanSandbox.dir\physics\collider.cpp.obj
-FAILED: [code=3221225477] CMakeFiles/VulkanSandbox.dir/physics/collider.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\physics\collider.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\physics\collider.cpp
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C2760: syntax error: ')' was unexpected here; expected ';'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'expression-statement'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'statement'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'statement-seq'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): note: missing one of:  '}' ?
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C2760: syntax error: ')' was unexpected here; expected '}'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'compound-statement'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'selection-statement'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(458): error C2065: '_Pfmod': undeclared identifier
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(461): error C2065: '_Pfmod': undeclared identifier
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(465): error C2065: '_Psave_guard': undeclared identifier
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): error C3861: '_Xtime_get_ticks': identifier not found
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): fatal error C1907: unable to recover from previous error(s); stopping compilation
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
@@ -366,42 +380,7 @@ C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.3520
 INTERNAL COMPILER ERROR in 'C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe'
     Please choose the Technical Support command on the Visual C++
     Help menu, or open the Technical Support help file for more information
-[5/24] Building CXX object CMakeFiles\VulkanSandbox.dir\renderer\material_system.cpp.obj
-FAILED: [code=3221225477] CMakeFiles/VulkanSandbox.dir/renderer/material_system.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\renderer\material_system.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\renderer\material_system.cpp
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C2760: syntax error: ')' was unexpected here; expected ';'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'expression-statement'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'statement'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'statement-seq'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): note: missing one of:  '}' ?
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C2760: syntax error: ')' was unexpected here; expected '}'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'compound-statement'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token ')' following 'selection-statement'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(458): error C2065: '_Pfmod': undeclared identifier
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(461): error C2065: '_Pfmod': undeclared identifier
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(465): error C2065: '_Psave_guard': undeclared identifier
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): error C3861: '_Xtime_get_ticks': identifier not found
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): fatal error C1907: unable to recover from previous error(s); stopping compilation
-INTERNAL COMPILER ERROR in 'C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe'
-    Please choose the Technical Support command on the Visual C++
-    Help menu, or open the Technical Support help file for more information
-[6/24] Building CXX object CMakeFiles\VulkanSandbox.dir\core\time.cpp.obj
-FAILED: [code=2] CMakeFiles/VulkanSandbox.dir/core/time.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\core\time.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.cpp
+\core\time.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.cpp
 C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.h(23): error C3083: 'chrono': the symbol to the left of a '::' must be a type
 C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.h(23): error C2039: 'high_resolution_clock': is not a member of 'std'
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\cstdint(20): note: see declaration of 'std'
@@ -475,9 +454,7 @@ C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.cpp(29): error C2065: 'm_frameC
 C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.cpp(30): error C2065: 'm_fpsAccumulator': undeclared identifier
 C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.cpp(33): error C2065: 'm_lastFrame': undeclared identifier
 C:\Users\Nuri\Desktop\VulkanAPI\engine\core\time.cpp(33): error C2065: 'currentFrame': undeclared identifier
-[7/24] Building CXX object CMakeFiles\VulkanSandbox.dir\core\application.cpp.obj
-FAILED: [code=3221225477] CMakeFiles/VulkanSandbox.dir/core/application.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\core\application.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\application.cpp
+\core\application.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\core\application.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
@@ -509,8 +486,7 @@ INTERNAL COMPILER ERROR in 'C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\144
     Please choose the Technical Support command on the Visual C++
     Help menu, or open the Technical Support help file for more information
 [8/24] Building CXX object CMakeFiles\VulkanSandbox.dir\main.cpp.obj
-FAILED: [code=3221225477] CMakeFiles/VulkanSandbox.dir/main.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\main.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\main.cpp
+\main.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\main.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
@@ -542,8 +518,7 @@ INTERNAL COMPILER ERROR in 'C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\144
     Please choose the Technical Support command on the Visual C++
     Help menu, or open the Technical Support help file for more information
 [9/24] Building CXX object CMakeFiles\VulkanSandbox.dir\meadow_app.cpp.obj
-FAILED: [code=3221225477] CMakeFiles/VulkanSandbox.dir/meadow_app.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\meadow_app.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\meadow_app.cpp
+\meadow_app.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\meadow_app.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
@@ -572,11 +547,7 @@ C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.3520
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): error C3861: '_Xtime_get_ticks': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): fatal error C1907: unable to recover from previous error(s); stopping compilation
 INTERNAL COMPILER ERROR in 'C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe'
-    Please choose the Technical Support command on the Visual C++
-    Help menu, or open the Technical Support help file for more information
-[10/24] Building CXX object CMakeFiles\VulkanSandbox.dir\renderer\shadow_mapper.cpp.obj
-FAILED: [code=3221225477] CMakeFiles/VulkanSandbox.dir/renderer/shadow_mapper.cpp.obj
-C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP  -IC:\VulkanSDK\1.4.309.0\Include -IC:\VulkanSDK\1.4.309.0\Include\Volk -IC:\VulkanSDK\1.4.309.0\Include\vma -IC:\Users\Nuri\Desktop\VulkanAPI\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\engine -IC:\Users\Nuri\Desktop\VulkanAPI\engine\core -IC:\Users\Nuri\Desktop\VulkanAPI\engine\renderer -IC:\Users\Nuri\Desktop\VulkanAPI\engine\rhi -IC:\Users\Nuri\Desktop\VulkanAPI\engine\physics -IC:\Users\Nuri\Desktop\VulkanAPI\engine\world /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /W4 /permissive- /showIncludes /FoCMakeFiles\VulkanSandbox.dir\renderer\shadow_mapper.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\renderer\shadow_mapper.cpp
+\renderer\shadow_mapper.cpp.obj /FdCMakeFiles\VulkanSandbox.dir\ /FS -c C:\Users\Nuri\Desktop\VulkanAPI\engine\renderer\shadow_mapper.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(657): error C3861: '_Query_perf_frequency': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\__msvc_chrono.hpp(658): error C3861: '_Query_perf_counter': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\xlocale(453): error C3878: syntax error: unexpected token '_Psave_guard' following 'expression'
@@ -604,9 +575,3 @@ C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.3520
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\iosfwd(142): note: This diagnostic occurred in the compiler generated function 'const _Facet &std::use_facet(const std::locale &)'
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): error C3861: '_Xtime_get_ticks': identifier not found
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\chrono(89): fatal error C1907: unable to recover from previous error(s); stopping compilation
-INTERNAL COMPILER ERROR in 'C:\PROGRA~1\MICROS~3\2022\COMMUN~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe'
-    Please choose the Technical Support command on the Visual C++
-    Help menu, or open the Technical Support help file for more information
-ninja: build stopped: subcommand failed.
-Access violation
-CMake Error: Generator: execution of make failed. Make command was: C:/Users/Nuri/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe

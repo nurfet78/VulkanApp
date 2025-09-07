@@ -1,5 +1,7 @@
 // engine/core/time.h
 
+#pragma once
+
 #include <chrono>  
 #include <cstdint>
 
@@ -20,8 +22,8 @@ public:
     float GetTimeScale() const { return m_timeScale; }
 
 private:
-    using Clock = std::chrono::high_resolution_clock;
-    using TimePoint = std::chrono::time_point<Clock>;
+    using Clock = ::std::chrono::high_resolution_clock;  // ИСПРАВЛЕНО: используем ::std::
+    using TimePoint = ::std::chrono::time_point<Clock>;  // ИСПРАВЛЕНО: используем ::std::
     
     TimePoint m_startTime;
     TimePoint m_lastFrame;

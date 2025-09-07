@@ -17,7 +17,7 @@ void Time::Update() {
     m_frameTime = duration.count() * 1000.0f; // milliseconds
     
     // Update total time
-    auto totalDuration = std::chrono::duration<float>(currentFrame - m_startTime);
+    auto duration = ::std::chrono::duration<float>(currentFrame - m_lastFrame);  // ИСПРАВЛЕНО: ::std::
     m_time = totalDuration.count();
     
     // Calculate FPS

@@ -1,5 +1,8 @@
 // engine/core/time.h
 
+#include <chrono>  
+#include <cstdint>
+
 namespace Core {
 	
 class Time {

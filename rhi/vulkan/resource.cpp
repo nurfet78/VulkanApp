@@ -87,10 +87,8 @@ void Buffer::CopyFrom(VkCommandBuffer cmd, Buffer* srcBuffer, VkDeviceSize size,
     vkCmdCopyBuffer(cmd, srcBuffer->m_buffer, m_buffer, 1, &copyRegion);
 }
 
-// Buffer::CopyFromImmediate - для совместимости, принимает CommandPool
 void Buffer::CopyFromImmediate(CommandPool* pool, Buffer* srcBuffer, VkDeviceSize size,
                               VkDeviceSize srcOffset, VkDeviceSize dstOffset) {
-    // Получаем командный буфер из переданного пула
     VkCommandBuffer cmd = pool->AllocateCommandBuffer();
     
     VkCommandBufferBeginInfo beginInfo{};
@@ -101,21 +99,30 @@ void Buffer::CopyFromImmediate(CommandPool* pool, Buffer* srcBuffer, VkDeviceSiz
     CopyFrom(cmd, srcBuffer, size, srcOffset, dstOffset);
     vkEndCommandBuffer(cmd);
     
-    // Submit через device (нужно будет передать fence)
+    // RAII fence wrapper
+    struct FenceGuard {
+        VkDevice device;
+        VkFence fence;
+        ~FenceGuard() { 
+            if (fence) vkDestroyFence(device, fence, nullptr); 
+        }
+    };
+    
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    
+    VkFence fence;
+    VK_CHECK(vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence));
+    FenceGuard guard{m_device->GetDevice(), fence};
+    
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
     
-    VkFence fence;
-    VkFenceCreateInfo fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence);
+    VK_CHECK(m_device->SubmitTransfer(&submitInfo, fence));
+    VK_CHECK(vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX));
     
-    m_device->SubmitTransfer(&submitInfo, fence);
-    vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
-    
-    vkDestroyFence(m_device->GetDevice(), fence, nullptr);
     pool->FreeCommandBuffer(cmd);
 }
 

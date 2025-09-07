@@ -83,7 +83,11 @@ CommandPoolManager::CommandPoolManager(Device* device) : m_device(device) {
     );
 }
 
+std::mutex CommandPoolManager::s_cleanupMutex;
+
 CommandPoolManager::~CommandPoolManager() {
+    std::lock_guard lock(s_cleanupMutex);
+    
     // Clean up thread-local pools if this thread created any
     if (t_device == m_device) {
         t_graphicsPool.reset();

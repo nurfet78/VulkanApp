@@ -1,26 +1,17 @@
-// Refactored MeadowApp
-// meadow_app.h - REFACTORED VERSION
+// meadow_app.h - FIXED VERSION
 #pragma once
 
 #include "core/application.h"
 #include <memory>
+#include <array>
 
-namespace Renderer {
-    class RenderContext;
-    class FrameManager;
-    class SceneRenderer;
-}
-
-namespace Scene {
-    class World;
-}
-
-namespace Physics {
-    class PhysicsWorld;
-}
-
-namespace World {
-    class MeadowScene;
+// Forward declarations
+namespace RHI::Vulkan {
+    class Device;
+    class Swapchain;
+    class CommandPoolManager;
+    class ResourceManager;
+    class TrianglePipeline;
 }
 
 class MeadowApp : public Core::Application {
@@ -35,15 +26,33 @@ protected:
     void OnRender() override;
 
 private:
-    // Core systems
-    std::unique_ptr<Renderer::RenderContext> m_renderContext;
-    std::unique_ptr<Renderer::FrameManager> m_frameManager;
-    std::unique_ptr<Renderer::SceneRenderer> m_sceneRenderer;
+    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
     
-    // Game systems
-    std::unique_ptr<Scene::World> m_sceneWorld;
-    std::unique_ptr<Physics::PhysicsWorld> m_physicsWorld;
-    std::unique_ptr<World::MeadowScene> m_meadowScene;
+    struct FrameData {
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
+        VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
+        VkFence inFlightFence = VK_NULL_HANDLE;
+    };
+
+    void CreateSyncObjects();
+    void DestroySyncObjects();
+    void RecreateSwapchain();
+    void RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
+    void DrawFrame();
+
+    // Core Vulkan objects
+    std::unique_ptr<RHI::Vulkan::Device> m_device;
+    std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
+    std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
+    std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;
+    std::unique_ptr<RHI::Vulkan::TrianglePipeline> m_trianglePipeline;
+    
+    // Frame data
+    std::array<FrameData, MAX_FRAMES_IN_FLIGHT> m_frames{};
+    uint32_t m_currentFrame = 0;
+    uint32_t m_swapchainImageCount = 0;
+    bool m_framebufferResized = false;
     
     // Statistics
     float m_totalTime = 0.0f;

@@ -53,6 +53,9 @@ public:
 private:
     Device* m_device;
     std::unique_ptr<CommandPool> m_transferPool;
+	
+	static void CleanupThreadPools();
+    static std::mutex s_cleanupMutex;
     
     // Note: Thread-local pools are managed in the .cpp file
 };

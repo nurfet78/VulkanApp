@@ -1,3 +1,0 @@
-C:/Users/Nuri/Desktop/VulkanAPI/engine/build/CMakeFiles/VulkanSandbox.dir
-C:/Users/Nuri/Desktop/VulkanAPI/engine/build/CMakeFiles/edit_cache.dir
-C:/Users/Nuri/Desktop/VulkanAPI/engine/build/CMakeFiles/rebuild_cache.dir

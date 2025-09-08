@@ -224,7 +224,8 @@ Buffer* StagingBufferPool::AcquireBuffer(size_t size) {
     auto it = m_pools.lower_bound(size);
     if (it != m_pools.end()) {
         for (auto& entry : it->second) {
-            if (!entry.inUse.exchange(true)) {
+            if (!entry.inUse) {
+                entry.inUse = true;  // Под защитой m_mutex
                 entry.lastUsed = std::chrono::steady_clock::now();
                 return entry.buffer.get();
             }
@@ -262,20 +263,21 @@ void StagingBufferPool::ReleaseBuffer(Buffer* buffer) {
 void StagingBufferPool::GarbageCollect() {
     // First process completed uploads
     ProcessCompletedUploads();
-    
+
     std::lock_guard lock(m_mutex);
     auto now = std::chrono::steady_clock::now();
     const auto maxAge = std::chrono::seconds(30);
-    
+
     for (auto& [size, buffers] : m_pools) {
-        buffers.erase(
-            std::remove_if(buffers.begin(), buffers.end(),
-                [&](const BufferEntry& entry) {
-                    return !entry.inUse && 
-                           (now - entry.lastUsed) > maxAge;
-                }),
-            buffers.end()
-        );
+        // Используем итераторы для удаления без копирования
+        for (auto it = buffers.begin(); it != buffers.end();) {
+            if (!it->inUse && (now - it->lastUsed) > maxAge) {
+                it = buffers.erase(it);  // erase возвращает следующий итератор
+            }
+            else {
+                ++it;
+            }
+        }
     }
 }
 

@@ -16,35 +16,32 @@
 #include <thread>
 #include <cstdint>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <cstring>
 #include <set>
+#include <map>
+#include <variant>
+#include <deque>
+
+#include <filesystem> 
 
 #include <volk.h>
-
-// Дальше GLFW – но без макроса GLFW_INCLUDE_VULKAN!
-// GLFW всё равно увидит типы VkInstance, VkSurfaceKHR,
-// потому что volk уже подтянул vulkan.h
-#include <GLFW/glfw3.h>
-
-// Теперь любые дополнительные заголовки
+#include <external/GLFW/glfw3.h>
 #include <vk_mem_alloc.h>
 
-//#include <GLFW/glfw3.h>
-
-//#define VK_NO_PROTOTYPES
-//#include <vulkan/vulkan.h>
-//#include <volk.h>
-//#include <vk_mem_alloc.h>
 
 #define _USE_MATH_DEFINES
 #include <cmath>
 
+#include <numbers>
+
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <execution>
 
 #include <queue>
 #include <mutex>
@@ -52,10 +49,12 @@
 #include <future>
 #include <atomic>
 
+#define GLM_ENABLE_EXPERIMENTAL
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>

@@ -1,4 +1,6 @@
 // meadow_app.cpp - ИСПРАВЛЕННАЯ ВЕРСИЯ
+
+#include "rhi/vulkan/staging_buffer_pool.h"
 #include "meadow_app.h"
 #include "core/window.h"
 #include "core/input.h"
@@ -9,9 +11,7 @@
 #include "rhi/vulkan/command_pool.h"
 #include "rhi/vulkan/pipeline.h"
 #include "rhi/vulkan/resource.h"
-#include <iostream>
-#include <iomanip>
-#include <thread>
+
 
 MeadowApp::MeadowApp() 
     : Core::Application({

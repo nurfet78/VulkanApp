@@ -37,6 +37,8 @@ public:
     ~DescriptorLayoutCache();
     
     VkDescriptorSetLayout CreateDescriptorLayout(const VkDescriptorSetLayoutCreateInfo* info);
+
+    Device* GetDevice() const { return m_device; }
     
     struct LayoutInfo {
         std::vector<VkDescriptorSetLayoutBinding> bindings;

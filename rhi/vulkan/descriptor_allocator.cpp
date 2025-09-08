@@ -254,7 +254,7 @@ bool DescriptorBuilder::Build(VkDescriptorSet& set, VkDescriptorSetLayout& layou
         w.dstSet = set;
     }
     
-    vkUpdateDescriptorSets(m_cache->m_device->GetDevice(),
+    vkUpdateDescriptorSets(m_cache->GetDevice()->GetDevice(),
                           static_cast<uint32_t>(m_writes.size()),
                           m_writes.data(), 0, nullptr);
     

@@ -1,6 +1,5 @@
 // engine/renderer/material_system.cpp
 #include "material_system.h"
-#include "rhi/vulkan/device.h"
 #include "rhi/vulkan/pipeline.h"
 #include "rhi/vulkan/resource.h"
 #include "rhi/vulkan/descriptor_allocator.h"
@@ -226,7 +225,7 @@ Material* MaterialSystem::CreateMaterial(const std::string& name, const std::str
     if (template_->GetDescriptorLayout()) {
         VkDescriptorSet set;
         if (m_descriptorAllocator->Allocate(&set, template_->GetDescriptorLayout())) {
-            material->m_descriptorSet = set;
+            material->SetDescriptorSet(set);
         }
     }
     

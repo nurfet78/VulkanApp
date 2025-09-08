@@ -67,16 +67,25 @@ public:
 private:
     struct BufferEntry {
         std::unique_ptr<Buffer> buffer;
-        std::atomic<bool> inUse{false};
+        size_t size;
         std::chrono::steady_clock::time_point lastUsed;
+        bool inUse;  
+
+        BufferEntry() = default;
+        BufferEntry(BufferEntry&&) noexcept = default;
+        BufferEntry& operator=(BufferEntry&&) noexcept = default;
+
+        BufferEntry(const BufferEntry&) = delete;
+        BufferEntry& operator=(const BufferEntry&) = delete;
     };
     
     Device* m_device;
     std::unique_ptr<FencePool> m_fencePool;
-    std::map<size_t, std::vector<BufferEntry>> m_pools;
+    std::map<size_t, std::deque<BufferEntry>> m_pools;
     std::queue<UploadRequest> m_pendingUploads;
     mutable std::mutex m_mutex;
     mutable std::mutex m_uploadMutex;
     
     size_t NextPowerOfTwo(size_t n);
 };
+}

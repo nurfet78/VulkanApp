@@ -3,6 +3,8 @@
 #include "device.h"
 #include "resource.h"
 #include "staging_buffer_pool.h"
+
+#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>  // Assume we have stb_image for texture loading
 
 namespace RHI::Vulkan {
@@ -96,19 +98,24 @@ void AsyncResourceLoader::LoadTextureAsync(const std::string& name,
     request.name = name;
     request.path = path;
     request.priority = priority;
-    request.callback = [callback, ptr = &request.promise]() {
+
+    // Создаем shared_ptr для future
+    auto future_ptr = std::make_shared<std::future<void*>>(request.promise.get_future());
+
+    // Теперь можем копировать shared_ptr
+    request.callback = [callback, future_ptr]() {
         if (callback) {
-            void* result = ptr->get_future().get();
+            void* result = future_ptr->get();
             callback(static_cast<Image*>(result));
         }
     };
-    
+
     {
         std::lock_guard lock(m_queueMutex);
         m_loadQueue.push(std::move(request));
         m_totalRequests++;
     }
-    
+
     m_queueCV.notify_one();
 }
 
@@ -121,14 +128,23 @@ void AsyncResourceLoader::LoadMeshAsync(const std::string& name,
     request.name = name;
     request.path = path;
     request.priority = priority;
-    request.callback = callback;
-    
+
+    // Создаем shared_ptr для future
+    auto future_ptr = std::make_shared<std::future<void*>>(request.promise.get_future());
+
+    request.callback = [callback, future_ptr]() {
+        if (callback) {
+            void* result = future_ptr->get();
+            callback(result);
+        }
+    };
+
     {
         std::lock_guard lock(m_queueMutex);
         m_loadQueue.push(std::move(request));
         m_totalRequests++;
     }
-    
+
     m_queueCV.notify_one();
 }
 

@@ -43,6 +43,9 @@ public:
     void WaitForFence(uint32_t frameIndex, uint64_t timeout = UINT64_MAX);
     void ResetFence(uint32_t frameIndex);
 
+    bool HasImageCountChanged() const { return m_imageCountChanged; }
+    void ResetImageCountChangedFlag() { m_imageCountChanged = false; }
+
 private:
     void CreateSwapchain(uint32_t width, uint32_t height);
     void CreateImageViews();
@@ -63,6 +66,7 @@ private:
     
     uint32_t m_currentFrame = 0;
     bool m_vsync;
+    bool m_imageCountChanged = false;
 };
 
 } // namespace RHI::Vulkan

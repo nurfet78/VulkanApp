@@ -50,9 +50,20 @@ void* Buffer::Map() {
 }
 
 void Buffer::Unmap() {
-    if (m_mappedData && !(m_allocation && vmaGetAllocationMemoryProperties(m_device->GetAllocator(), m_allocation))) {
-        vmaUnmapMemory(m_device->GetAllocator(), m_allocation);
-        m_mappedData = nullptr;
+    if (m_mappedData && m_allocation) {
+        // Получаем флаги памяти
+        VkMemoryPropertyFlags memFlags;
+        vmaGetAllocationMemoryProperties(
+            m_device->GetAllocator(),
+            m_allocation,
+            &memFlags  // Передаем указатель на переменную для результата
+        );
+
+        // Проверяем, если память не является HOST_COHERENT, нужно unmapить
+        if (!(memFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            vmaUnmapMemory(m_device->GetAllocator(), m_allocation);
+            m_mappedData = nullptr;
+        }
     }
 }
 
@@ -440,12 +451,12 @@ Mesh* ResourceManager::CreateSphereMesh(uint32_t segments) {
     std::vector<uint32_t> indices;
     
     for (uint32_t lat = 0; lat <= segments; lat++) {
-        float theta = lat * M_PI / segments;
+        float theta = lat * std::numbers::pi / segments;
         float sinTheta = sin(theta);
         float cosTheta = cos(theta);
         
         for (uint32_t lon = 0; lon <= segments; lon++) {
-            float phi = lon * 2 * M_PI / segments;
+            float phi = lon * 2 * std::numbers::pi / segments;
             float sinPhi = sin(phi);
             float cosPhi = cos(phi);
             

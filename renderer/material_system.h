@@ -2,7 +2,7 @@
 #pragma once
 
 #include "rhi/vulkan/vulkan_common.h"
-
+#include "rhi/vulkan/device.h"
 
 namespace RHI::Vulkan {
     class Device;
@@ -24,8 +24,7 @@ using MaterialParameter = std::variant<
     glm::mat4,
     uint32_t,  // Texture index for bindless
     VkImageView,
-    VkSampler
->;
+    VkSampler>;
 
 // Material template defines the structure
 class MaterialTemplate {
@@ -100,6 +99,8 @@ public:
     
     // Bind for rendering
     void Bind(VkCommandBuffer cmd);
+	
+	void SetDescriptorSet(VkDescriptorSet set) { m_descriptorSet = set; }
     
     // Get resources
     VkDescriptorSet GetDescriptorSet() const { return m_descriptorSet; }
@@ -160,3 +161,4 @@ private:
     std::unordered_map<std::string, std::unique_ptr<MaterialTemplate>> m_templates;
     std::unordered_map<std::string, std::unique_ptr<Material>> m_materials;
 };
+}

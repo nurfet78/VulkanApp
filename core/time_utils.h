@@ -2,8 +2,9 @@
 
 #pragma once
 
-#include <chrono>  
-#include <cstdint>
+
+#include "pch.h"
+
 
 namespace Core {
 	
@@ -22,8 +23,8 @@ public:
     float GetTimeScale() const { return m_timeScale; }
 
 private:
-    using Clock = ::std::chrono::high_resolution_clock;  // ИСПРАВЛЕНО: используем ::std::
-    using TimePoint = ::std::chrono::time_point<Clock>;  // ИСПРАВЛЕНО: используем ::std::
+    using Clock = std::chrono::high_resolution_clock;
+    using TimePoint = std::chrono::time_point<Clock>;
     
     TimePoint m_startTime;
     TimePoint m_lastFrame;

@@ -4,8 +4,6 @@
 #include "scene/entity.h"
 #include "scene/components.h"
 #include "physics/collider.h"
-#include <glm/glm.hpp>
-#include <memory>
 
 namespace Core { class Input; }
 

@@ -2,8 +2,6 @@
 #include "command_buffer_optimizer.h"
 #include "device.h"
 #include "command_pool.h"
-#include <thread>
-#include <execution>
 
 namespace RHI::Vulkan {
 

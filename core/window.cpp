@@ -1,8 +1,7 @@
 // engine/core/window.cpp
 
 #include "window.h"
-#include <stdexcept>
-#include <iostream>
+
 
 namespace Core {
 

@@ -3,9 +3,7 @@
 
 #include "scene/entity.h"
 #include "physics/collider.h"
-#include <glm/glm.hpp>
-#include <memory>
-#include <vector>
+
 
 namespace Scene { class World; }
 namespace RHI::Vulkan { class Device; class ResourceManager; }

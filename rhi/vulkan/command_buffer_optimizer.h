@@ -2,9 +2,7 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <vector>
-#include <memory>
-#include <functional>
+
 
 namespace RHI::Vulkan {
 

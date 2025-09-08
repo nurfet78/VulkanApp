@@ -1,8 +1,8 @@
 // engine/renderer/scene_renderer.h
 #pragma once
 
-#include <memory>
-#include <vector>
+#include "pch.h"
+
 
 namespace Scene { class World; }
 namespace RHI::Vulkan { class Pipeline; }

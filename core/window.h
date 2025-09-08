@@ -1,19 +1,14 @@
 // engine/core/window.h
 #pragma once
 
-#include <GLFW/glfw3.h>
-#include <string>
-#include <functional>
-#include <vector>
-#include <cstdint>
+#include "pch.h"
+
+
 
 // Forward declarations - не включаем vulkan напрямую
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
-typedef enum VkResult {
-    VK_SUCCESS = 0,
-    // ... другие коды результата при необходимости
-} VkResult;
+
 
 namespace Core {
 

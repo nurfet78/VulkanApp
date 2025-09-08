@@ -1,15 +1,7 @@
 // engine/rhi/vulkan/vulkan_common.h
 #pragma once
 
-#define VK_NO_PROTOTYPES
-#include <vulkan/vulkan.h>
-#include <volk.h>
-#include <vk_mem_alloc.h>
-
-#include <vector>
-#include <string>
-#include <optional>
-#include <stdexcept>
+#include "pch.h"
 
 #define VK_CHECK(x) do { \
     VkResult result = x; \

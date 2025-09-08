@@ -1,9 +1,7 @@
 // engine/world/fps_player.cpp
 #include "fps_player.h"
 #include "core/input.h"
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/quaternion.hpp>
-#include <algorithm>
+
 
 namespace World {
 

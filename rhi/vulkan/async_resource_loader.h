@@ -2,14 +2,7 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <memory>
-#include <queue>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <functional>
-#include <future>
-#include <atomic>
+
 
 namespace RHI::Vulkan {
 

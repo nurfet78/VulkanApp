@@ -2,9 +2,6 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <memory>
-#include <array>
-#include <mutex>
 
 namespace Core { class Window; }
 

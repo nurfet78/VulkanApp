@@ -1,10 +1,5 @@
 // engine/core/application.h
-#pragma once
-
-#include <memory>
-#include <string>
-#include <functional>
-#include <chrono>
+#include "pch.h"
 
 namespace Core {
 

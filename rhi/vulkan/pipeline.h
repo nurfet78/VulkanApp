@@ -2,8 +2,7 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <vector>
-#include <string>
+
 
 namespace RHI::Vulkan {
 

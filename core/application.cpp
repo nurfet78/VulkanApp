@@ -1,10 +1,9 @@
 // engine/core/application.cpp
 
-#include <iostream>  // ПЕРЕМЕЩЕНО: до локальных заголовков
 #include "application.h"
 #include "window.h"
 #include "input.h"
-#include "time.h"
+#include "time_utils.h"
 #include "job_system.h"
 
 

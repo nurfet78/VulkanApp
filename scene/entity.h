@@ -1,12 +1,9 @@
 // engine/scene/entity.h
 #pragma once
 
+#include "pch.h"
+
 #include <typeindex>
-#include <unordered_map>
-#include <memory>
-#include <vector>
-#include <algorithm>
-#include <cassert>
 
 namespace Scene {
 

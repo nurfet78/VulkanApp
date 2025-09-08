@@ -2,10 +2,6 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <glm/glm.hpp>
-#include <memory>
-#include <unordered_map>
-#include <string>
 
 namespace RHI::Vulkan {
 

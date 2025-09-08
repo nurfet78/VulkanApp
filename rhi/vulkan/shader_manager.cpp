@@ -1,8 +1,6 @@
 // engine/rhi/vulkan/shader_manager.cpp
 #include "shader_manager.h"
 #include "device.h"
-#include <fstream>
-#include <sstream>
 #include <shaderc/shaderc.hpp>  // Assume we have shaderc for GLSL compilation
 
 namespace RHI::Vulkan {

@@ -2,9 +2,7 @@
 #pragma once
 
 #include "rhi/vulkan/vulkan_common.h"
-#include <glm/glm.hpp>
-#include <memory>
-#include <vector>
+
 
 namespace RHI::Vulkan {
     class Device;

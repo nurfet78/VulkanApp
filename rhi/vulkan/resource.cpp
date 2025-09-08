@@ -1,14 +1,11 @@
 // engine/rhi/vulkan/resource.cpp
 
 // engine/rhi/vulkan/resource.cpp
-#define _USE_MATH_DEFINES  // ДОБАВЛЕНО: для M_PI на Windows
-#include <cmath>           // ДОБАВЛЕНО: перед другими включениями
 
 #include "resource.h"
 #include "device.h"
 #include "command_pool.h"
 #include "staging_buffer_pool.h"
-#include <cstring>
 
 
 namespace RHI::Vulkan {

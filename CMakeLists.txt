@@ -11,15 +11,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED  ON)
 set(CMAKE_CXX_EXTENSIONS         OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(WIN32)
+    add_compile_definitions(
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS
+    )
+endif()
+
 
 set(SRC
 main.cpp
 meadow_app.cpp
+pch.cpp
 
 core/application.cpp
 core/input.cpp
 core/job_system.cpp
-core/time.cpp
+core/time_utils.cpp
 core/window.cpp
 
 physics/collider.cpp
@@ -45,6 +54,11 @@ world/meadow_scene.cpp
 )
 
 add_executable(VulkanSandbox ${SRC})
+
+target_precompile_headers(VulkanSandbox
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/pch.h
+)
 
 
 if(NOT DEFINED ENV{VULKAN_SDK})
@@ -80,8 +94,6 @@ target_link_libraries(VulkanSandbox PRIVATE Vulkan::Vulkan)
 target_link_directories(VulkanSandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/engine/lib)
 target_link_libraries   (VulkanSandbox PRIVATE glfw3  user32 gdi32 shell32)
 
-
-target_compile_definitions(VulkanSandbox PRIVATE NOMINMAX)
 
 if(MSVC)
 target_compile_options(VulkanSandbox

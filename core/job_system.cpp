@@ -1,8 +1,7 @@
 // engine/core/job_system.cpp
-#include <windows.h>
 
 #include "job_system.h"
-#include <algorithm>
+
 
 namespace Core {
 

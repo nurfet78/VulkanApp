@@ -1,14 +1,8 @@
 // engine/core/job_system.h
 #pragma once
 
-#include <thread>
-#include <atomic>
-#include <condition_variable>
-#include <mutex>
-#include <functional>
-#include <queue>
-#include <vector>
-#include <future>
+#include "pch.h"
+
 
 namespace Core {
 

@@ -2,6 +2,7 @@
 #include "input.h"
 #include "window.h"
 
+
 namespace Core {
 
 Input* Input::s_instance = nullptr;

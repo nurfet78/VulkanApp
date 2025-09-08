@@ -2,8 +2,7 @@
 #pragma once
 
 #include "rhi/vulkan/vulkan_common.h"
-#include <array>
-#include <memory>
+
 
 namespace Renderer {
 

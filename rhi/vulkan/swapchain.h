@@ -2,8 +2,7 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <memory>
-#include <functional>
+
 
 namespace RHI::Vulkan {
 

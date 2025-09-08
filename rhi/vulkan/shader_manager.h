@@ -2,15 +2,6 @@
 #pragma once
 
 #include "vulkan_common.h"
-#include <string>
-#include <unordered_map>
-#include <vector>
-#include <filesystem>
-#include <chrono>
-#include <functional>
-#include <thread>
-#include <atomic>
-#include <mutex>
 
 namespace RHI::Vulkan {
 

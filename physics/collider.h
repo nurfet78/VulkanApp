@@ -1,10 +1,7 @@
 // engine/physics/collider.h
 #pragma once
 
-#include <glm/glm.hpp>
-#include <vector>
-#include <functional>
-#include <memory>
+#include "pch.h"
 
 namespace Physics {
 
@@ -161,22 +158,41 @@ namespace Collision {
 class PhysicsWorld {
 public:
     struct Collider {
-        enum Type { AABB_TYPE, SPHERE_TYPE, CAPSULE_TYPE };
-        
-        Type type;
-        union {
-            AABB aabb;
-            Sphere sphere;
-            Capsule capsule;
-        };
-        
-        bool isStatic = true;
-        bool isTrigger = false;
-        void* userData = nullptr;
-        std::function<void(Collider*, Collider*)> onCollision;
-        std::function<void(Collider*, Collider*)> onTriggerEnter;
-        std::function<void(Collider*, Collider*)> onTriggerExit;
+    enum Type { AABB_TYPE, SPHERE_TYPE, CAPSULE_TYPE };
+    
+    Type type;
+    union {
+        AABB aabb;
+        Sphere sphere;
+        Capsule capsule;
     };
+    
+    bool isStatic = true;
+    bool isTrigger = false;
+    void* userData = nullptr;
+    std::function<void(Collider*, Collider*)> onCollision;
+    std::function<void(Collider*, Collider*)> onTriggerEnter;
+    std::function<void(Collider*, Collider*)> onTriggerExit;
+
+    // Явный конструктор
+    Collider() 
+        : type(AABB_TYPE), isStatic(true), isTrigger(false),
+          userData(nullptr), onCollision(nullptr), onTriggerEnter(nullptr), onTriggerExit(nullptr)
+    {
+        // Инициализация union через placement new для AABB по умолчанию
+        new (&aabb) AABB();
+    }
+
+    // Явный деструктор (чтобы корректно разрушить union)
+    ~Collider() {
+        switch (type) {
+            case AABB_TYPE: aabb.~AABB(); break;
+            case SPHERE_TYPE: sphere.~Sphere(); break;
+            case CAPSULE_TYPE: capsule.~Capsule(); break;
+        }
+    }
+};
+
     
     PhysicsWorld() = default;
     ~PhysicsWorld() = default;

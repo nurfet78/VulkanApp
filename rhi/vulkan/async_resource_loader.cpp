@@ -3,7 +3,6 @@
 #include "device.h"
 #include "resource.h"
 #include "staging_buffer_pool.h"
-#include <fstream>
 #include <stb_image.h>  // Assume we have stb_image for texture loading
 
 namespace RHI::Vulkan {

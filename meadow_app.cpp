@@ -11,6 +11,7 @@
 #include "rhi/vulkan/command_pool.h"
 #include "rhi/vulkan/pipeline.h"
 #include "rhi/vulkan/resource.h"
+#include "rhi/vulkan/shader_manager.h"
 
 
 MeadowApp::MeadowApp() 
@@ -28,80 +29,133 @@ MeadowApp::~MeadowApp() noexcept = default;
 
 void MeadowApp::OnInitialize() {
     std::cout << "Initializing Meadow World..." << std::endl;
-    
-    // 1. Initialize Vulkan Device first
+
+    // 1. Initialize Vulkan Device first (это создает instance, surface, physical device, logical device)
     m_device = std::make_unique<RHI::Vulkan::Device>(GetWindow(), true);
-    
-    // 2. Create swapchain
+
+    // Теперь Device полностью инициализирован и знает семейства очередей
+
+    m_shaderManager = std::make_unique<RHI::Vulkan::ShaderManager>(m_device.get());
+    m_shaderManager->EnableHotReload(true); // Включаем горячую перезагрузку для удобства разработки
+
+    // 3. Load all shader programs needed for the application
+    LoadShaders(); // Выносим загрузку шейдеров в отдельную функцию для чистоты
+
+    // 2. Create swapchain (требует полностью инициализированный Device)
     m_swapchain = std::make_unique<RHI::Vulkan::Swapchain>(
-        m_device.get(), 
-        GetWindow()->GetWidth(), 
+        m_device.get(),
+        GetWindow()->GetWidth(),
         GetWindow()->GetHeight(),
         true // vsync
     );
-    
+
     // Store initial image count
     m_swapchainImageCount = m_swapchain->GetImageCount();
-    
-    // 3. Create command pool manager BEFORE resource manager
+
+    // 3. Create command pool manager (теперь Device знает семейства очередей)
     m_commandPoolManager = std::make_unique<RHI::Vulkan::CommandPoolManager>(m_device.get());
-    
-    // 4. NOW create resource manager with valid command pool
+
+    // 4. Create resource manager с valid command pool
     m_resourceManager = std::make_unique<RHI::Vulkan::ResourceManager>(
-        m_device.get(), 
+        m_device.get(),
         m_commandPoolManager->GetTransferPool()
     );
-    
-    // 5. Create triangle pipeline
+
+    // 5. Create triangle pipeline (требует Device и format от swapchain)
     m_trianglePipeline = std::make_unique<RHI::Vulkan::TrianglePipeline>(
         m_device.get(),
+        m_shaderManager.get(),
         m_swapchain->GetFormat()
     );
-    
+
     // 6. Create sync objects and command buffers for each frame
     CreateSyncObjects();
-    
+
     // Set resize callback
     GetWindow()->SetResizeCallback([this](uint32_t width, uint32_t height) {
         m_framebufferResized = true;
     });
-    
+
     // Additional key bindings
     GetInput()->RegisterKeyCallback(GLFW_KEY_ESCAPE, [this](int action) {
         if (action == GLFW_PRESS) {
             RequestExit();
         }
     });
-    
+
     // Show controls
     std::cout << "\n=== Controls ===" << std::endl;
     std::cout << "F11    - Toggle fullscreen" << std::endl;
     std::cout << "ESC    - Exit" << std::endl;
     std::cout << "================" << std::endl;
-    
+
     std::cout << "\nVulkan Device: " << m_device->GetProperties().deviceName << std::endl;
     std::cout << "Swapchain Images: " << m_swapchain->GetImageCount() << " (Triple Buffering)" << std::endl;
     std::cout << "Frames in Flight: " << MAX_FRAMES_IN_FLIGHT << std::endl;
     std::cout << "Worker Threads: " << GetJobSystem()->GetThreadCount() << std::endl;
 }
 
+void MeadowApp::LoadShaders() {
+    std::cout << "Compiling shaders..." << std::endl;
+
+    // Шейдерная программа для тестового треугольника
+    auto* triangleProgram = m_shaderManager->CreateProgram("Triangle");
+    triangleProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/triangle.vert");
+    triangleProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/triangle.frag");
+    if (!triangleProgram->Compile()) {
+        throw std::runtime_error("Failed to compile Triangle shader program!");
+    }
+
+    // Шейдерная программа для скайбокса (если есть)
+     auto* skyProgram = m_shaderManager->CreateProgram("Sky");
+     skyProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/sky.vert");
+     skyProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/sky.frag");
+     if (!skyProgram->Compile()) {
+         throw std::runtime_error("Failed to compile Sky shader program!");
+     }
+
+    // ... Добавьте здесь все остальные шейдерные программы вашего приложения
+}
+
 void MeadowApp::OnShutdown() {
     std::cout << "Shutting down..." << std::endl;
-    
-    // Wait for all frames to complete
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        if (m_frames[i].inFlightFence != VK_NULL_HANDLE) {
-            vkWaitForFences(m_device->GetDevice(), 1, &m_frames[i].inFlightFence, VK_TRUE, UINT64_MAX);
-        }
+
+    // Проверяем, что m_device вообще существует, прежде чем его использовать
+    if (!m_device) {
+        return;
     }
-    
-    // Cleanup in REVERSE order of creation
+
+    // Ждем, пока GPU закончит все свои дела.
+    // vkDeviceWaitIdle делает то же самое, что и ожидание всех fence'ов, и даже больше.
+    // Поэтому можно оставить только его, это надежнее.
+    vkDeviceWaitIdle(m_device->GetDevice());
+
+    // Теперь безопасно уничтожать объекты в порядке, ОБРАТНОМ их созданию.
+
+    // 1. Уничтожаем объекты синхронизации
     DestroySyncObjects();
-    m_trianglePipeline.reset();
-    m_resourceManager.reset();  // Destroy before command pool manager
-    m_commandPoolManager.reset();
-    m_swapchain.reset();
-    m_device.reset();
+
+    // 2. Уничтожаем высокоуровневые объекты рендера
+    //if (m_skyRenderer) m_skyRenderer.reset(); // Не забудьте, если добавили
+    if (m_trianglePipeline) m_trianglePipeline.reset();
+
+    // 3. Уничтожаем менеджеры
+    if (m_resourceManager) m_resourceManager.reset();
+
+    // === КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ===
+    // 4. Уничтожаем ShaderManager ПЕРЕД уничтожением устройства.
+    //    Это вызовет деструкторы всех ShaderProgram и уничтожит все VkShaderModule.
+    if (m_shaderManager) m_shaderManager.reset();
+    // =============================
+
+    // 5. Уничтожаем "системные" объекты Vulkan
+    if (m_commandPoolManager) m_commandPoolManager.reset();
+    if (m_swapchain) m_swapchain.reset();
+
+    // 6. В САМОМ КОНЦЕ уничтожаем логическое устройство
+    if (m_device) m_device.reset();
+
+    std::cout << "Shutdown complete." << std::endl;
 }
 
 void MeadowApp::OnUpdate(float deltaTime) {
@@ -161,15 +215,24 @@ void MeadowApp::CreateSyncObjects() {
 }
 
 void MeadowApp::DestroySyncObjects() {
+    // Еще раз убедимся, что GPU не использует эти объекты
+    vkDeviceWaitIdle(m_device->GetDevice());
+
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // Сначала fence'ы
+        if (m_frames[i].inFlightFence != VK_NULL_HANDLE) {
+            vkDestroyFence(m_device->GetDevice(), m_frames[i].inFlightFence, nullptr);
+            m_frames[i].inFlightFence = VK_NULL_HANDLE;
+        }
+
+        // Потом семафоры
         if (m_frames[i].imageAvailableSemaphore != VK_NULL_HANDLE) {
             vkDestroySemaphore(m_device->GetDevice(), m_frames[i].imageAvailableSemaphore, nullptr);
+            m_frames[i].imageAvailableSemaphore = VK_NULL_HANDLE;
         }
         if (m_frames[i].renderFinishedSemaphore != VK_NULL_HANDLE) {
             vkDestroySemaphore(m_device->GetDevice(), m_frames[i].renderFinishedSemaphore, nullptr);
-        }
-        if (m_frames[i].inFlightFence != VK_NULL_HANDLE) {
-            vkDestroyFence(m_device->GetDevice(), m_frames[i].inFlightFence, nullptr);
+            m_frames[i].renderFinishedSemaphore = VK_NULL_HANDLE;
         }
     }
 }

@@ -12,6 +12,7 @@ namespace RHI::Vulkan {
     class CommandPoolManager;
     class ResourceManager;
     class TrianglePipeline;
+    class ShaderManager;
 }
 
 class MeadowApp : public Core::Application {
@@ -41,8 +42,11 @@ private:
     void RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
     void DrawFrame();
 
+    void LoadShaders();
+
     // Core Vulkan objects
     std::unique_ptr<RHI::Vulkan::Device> m_device;
+    std::unique_ptr<RHI::Vulkan::ShaderManager> m_shaderManager;
     std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
     std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
     std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;

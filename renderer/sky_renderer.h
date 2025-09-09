@@ -6,8 +6,9 @@
 
 namespace RHI::Vulkan {
     class Device;
-    class Pipeline;
+    class ReloadablePipeline;
     class Image;
+    class ShaderManager;
 }
 
 namespace Renderer {
@@ -20,8 +21,11 @@ public:
         HDRI
     };
     
-    SkyRenderer(RHI::Vulkan::Device* device, VkFormat colorFormat);
-    ~SkyRenderer();
+    SkyRenderer(RHI::Vulkan::Device* device,
+        RHI::Vulkan::ShaderManager* shaderManager,
+        VkFormat colorFormat,
+        VkFormat depthFormat);
+    ~SkyRenderer() = default;
     
     void SetSkyType(SkyType type) { m_skyType = type; }
     void SetSunDirection(const glm::vec3& direction) { m_sunDirection = glm::normalize(direction); }
@@ -37,13 +41,13 @@ public:
     VkImageView GetBRDFLUT() const;
     
 private:
-    void CreatePipeline();
+    void CreatePipeline(VkFormat colorFormat, VkFormat depthFormat);
     void CreateIBLResources();
     glm::vec3 CalculateSkyColor(const glm::vec3& rayDir) const;
     
     RHI::Vulkan::Device* m_device;
-    std::unique_ptr<RHI::Vulkan::Pipeline> m_pipeline;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    RHI::Vulkan::ShaderManager* m_shaderManager;
+    std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_pipeline;
     
     SkyType m_skyType = SkyType::Procedural;
     glm::vec3 m_sunDirection{-0.5f, -0.3f, -0.5f};

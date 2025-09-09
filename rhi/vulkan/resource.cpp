@@ -301,8 +301,8 @@ void ResourceManager::CreatePrimitiveMeshes() {
     CreatePlaneMesh();
     CreateCubeMesh();
     CreateSphereMesh();
-    CreateCylinderMesh();
-    CreateConeMesh();
+    //CreateCylinderMesh();
+    //CreateConeMesh();
 }
 
 // ResourceManager::CreateMesh обновлен

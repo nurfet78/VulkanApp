@@ -1,38 +1,56 @@
 // engine/renderer/sky_renderer.cpp
 #include "sky_renderer.h"
 #include "rhi/vulkan/device.h"
-#include "rhi/vulkan/pipeline.h"
+#include "rhi/vulkan/shader_manager.h"
 #include "rhi/vulkan/resource.h"
 
 namespace Renderer {
 
-SkyRenderer::SkyRenderer(RHI::Vulkan::Device* device, VkFormat colorFormat) : m_device(device) {
-    CreatePipeline();
-    CreateIBLResources();
-}
-
-SkyRenderer::~SkyRenderer() {
-    if (m_pipelineLayout) {
-        vkDestroyPipelineLayout(m_device->GetDevice(), m_pipelineLayout, nullptr);
+    SkyRenderer::SkyRenderer(RHI::Vulkan::Device* device, RHI::Vulkan::ShaderManager* shaderManager, VkFormat colorFormat, VkFormat depthFormat)
+        : m_device(device), m_shaderManager(shaderManager)
+    {
+        CreatePipeline(colorFormat, depthFormat); // Передаем форматы
+        CreateIBLResources();
     }
-}
 
-void SkyRenderer::CreatePipeline() {
-    // Create pipeline layout with push constants
-    VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(glm::mat4) + sizeof(glm::vec4) * 2; // invViewProj + cameraPos + time
-    
-    VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushConstantRange;
-    
-    VK_CHECK(vkCreatePipelineLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_pipelineLayout));
-    
-    // Sky pipeline will be created with actual shaders
-    // For now, using placeholder
+
+void SkyRenderer::CreatePipeline(VkFormat colorFormat, VkFormat depthFormat) {
+    RHI::Vulkan::ReloadablePipeline::CreateInfo pipelineInfo{};
+
+    // 1. Указываем имя шейдерной программы
+    pipelineInfo.shaderProgram = "Sky"; // Убедитесь, что она загружена в MeadowApp::LoadShaders
+
+    // 2. Настраиваем Push Constants. ReloadablePipeline сам создаст layout.
+    struct PushConstants {
+        glm::mat4 invViewProj;
+        glm::vec3 cameraPos; // В GLSL vec3 занимает место как vec4
+        float time;
+    };
+    pipelineInfo.pushConstantSize = sizeof(PushConstants);
+    pipelineInfo.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // 3. Настраиваем состояние рендера
+    pipelineInfo.colorFormat = colorFormat;
+    pipelineInfo.depthFormat = depthFormat;
+
+    // Для скайбокса важно правильно настроить тест глубины:
+    // мы проверяем глубину, но не пишем ее. Это рисует небо "позади" всего.
+    pipelineInfo.depthTestEnable = true;
+    pipelineInfo.depthWriteEnable = false;
+    pipelineInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; // Важно для трюка с z=1.0
+
+    // Мы находимся "внутри" скайбокса, поэтому отключаем отсечение
+    pipelineInfo.cullMode = VK_CULL_MODE_NONE;
+
+    // Вершинные буферы не используются
+    pipelineInfo.vertexBindings = {};
+    pipelineInfo.vertexAttributes = {};
+
+    // 4. Создаем пайплайн
+    m_pipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
+    if (!m_pipeline->Create(pipelineInfo)) {
+        throw std::runtime_error("Failed to create sky pipeline!");
+    }
 }
 
 void SkyRenderer::CreateIBLResources() {
@@ -109,16 +127,17 @@ void SkyRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExt
     pc.cameraPos = cameraPos;
     pc.time = m_timeOfDay;
     
-    vkCmdPushConstants(cmd, m_pipelineLayout, 
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(pc), &pc);
+    vkCmdPushConstants(cmd, m_pipeline->GetLayout(),
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(pc), &pc);
     
     // Bind pipeline and draw fullscreen triangle
     if (m_pipeline) {
+        // Метод Bind() есть и у ReloadablePipeline
         m_pipeline->Bind(cmd);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
-    
+
     vkCmdEndRendering(cmd);
 }
 

@@ -46,7 +46,7 @@ namespace RHI::Vulkan {
 
     private:
         bool CompileStage(ShaderStageInfo& stage);
-        std::vector<uint32_t> CompileGLSL(const std::string& source, VkShaderStageFlagBits stage);
+        std::vector<uint32_t> CompileGLSL(const std::string& source, VkShaderStageFlagBits stage, const std::string& sourceName);
 
         Device* m_device;
         std::string m_name;

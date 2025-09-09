@@ -48,10 +48,28 @@ public:
     VkResult SubmitCompute(const VkSubmitInfo* submitInfo, VkFence fence);
     VkResult SubmitTransfer(const VkSubmitInfo* submitInfo, VkFence fence);
     
-    uint32_t GetGraphicsQueueFamily() const { return m_queueFamilies.graphics.value(); }
-    uint32_t GetComputeQueueFamily() const { return m_queueFamilies.compute.value(); }
-    uint32_t GetTransferQueueFamily() const { return m_queueFamilies.transfer.value(); }
-    uint32_t GetPresentQueueFamily() const { return m_queueFamilies.present.value(); }
+    uint32_t GetGraphicsQueueFamily() const {
+        return m_queueFamilies.graphics.value_or(0);
+    }
+    uint32_t GetComputeQueueFamily() const {
+        return m_queueFamilies.compute.value_or(GetGraphicsQueueFamily());
+    }
+    uint32_t GetTransferQueueFamily() const {
+        return m_queueFamilies.transfer.value_or(GetGraphicsQueueFamily());
+    }
+    uint32_t GetPresentQueueFamily() const {
+        return m_queueFamilies.present.value_or(GetGraphicsQueueFamily());
+    }
+
+    // Добавить методы для проверки наличия отдельных очередей:
+    bool HasDedicatedTransferQueue() const {
+        return m_queueFamilies.transfer.has_value() &&
+            m_queueFamilies.transfer != m_queueFamilies.graphics;
+    }
+    bool HasDedicatedComputeQueue() const {
+        return m_queueFamilies.compute.has_value() &&
+            m_queueFamilies.compute != m_queueFamilies.graphics;
+    }
     
     const VkPhysicalDeviceProperties& GetProperties() const { return m_properties; }
     VkPhysicalDeviceLimits GetLimits() const { 
@@ -61,6 +79,7 @@ public:
     const DeviceFeatures& GetEnabledFeatures() const { return m_enabledFeatures; }
     
     SwapchainSupportDetails QuerySwapchainSupport() const;
+    SwapchainSupportDetails QuerySwapchainSupport(VkPhysicalDevice device) const;
     
     // Debug markers
     void SetObjectName(uint64_t object, VkObjectType type, const char* name) const;

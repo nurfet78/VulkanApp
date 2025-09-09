@@ -1,7 +1,7 @@
-// engine/rhi/vulkan/pipeline.h
+
 #pragma once
 
-#include "vulkan_common.h"
+#include "rhi/vulkan/vulkan_common.h"
 
 
 namespace RHI::Vulkan {
@@ -10,10 +10,10 @@ class Device;
 class ShaderManager;
 class ReloadablePipeline;
 
-class TrianglePipeline {
+class TriangleRenderer {
 public:
-    TrianglePipeline(Device* device, ShaderManager* shaderManager, VkFormat colorFormat);
-    ~TrianglePipeline() = default;
+    TriangleRenderer(Device* device, ShaderManager* shaderManager, VkFormat colorFormat);
+    ~TriangleRenderer() = default;
     
     void Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent);
     

@@ -38,6 +38,10 @@ public:
     
     const Frame& GetFrame(uint32_t index) const { return m_frames[index]; }
     uint32_t GetCurrentFrameIndex() const { return m_currentFrame; }
+
+    VkFormat GetDepthFormat() const { return m_depthFormat; }
+    VkImageView GetDepthImageView() const { return m_depthImageView; }
+    VkImage GetDepthImage() const { return m_depthImage; }
     
     // Wait for current frame fence
     void WaitForFence(uint32_t frameIndex, uint64_t timeout = UINT64_MAX);
@@ -55,6 +59,9 @@ private:
     VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats);
     VkPresentModeKHR ChoosePresentMode(const std::vector<VkPresentModeKHR>& modes);
     VkExtent2D ChooseExtent(const VkSurfaceCapabilitiesKHR& capabilities, uint32_t width, uint32_t height);
+
+    void CreateDepthResources();
+    void CleanupDepthResources(); // Отдельная функция для очистки
     
     Device* m_device;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
@@ -67,6 +74,11 @@ private:
     uint32_t m_currentFrame = 0;
     bool m_vsync;
     bool m_imageCountChanged = false;
+
+    VkImage m_depthImage = VK_NULL_HANDLE;
+    VkImageView m_depthImageView = VK_NULL_HANDLE;
+    VmaAllocation m_depthImageAllocation = VK_NULL_HANDLE; // Память для depth image
+    VkFormat m_depthFormat;
 };
 
 } // namespace RHI::Vulkan

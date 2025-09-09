@@ -9,14 +9,15 @@
 #include "rhi/vulkan/device.h"
 #include "rhi/vulkan/swapchain.h"
 #include "rhi/vulkan/command_pool.h"
-#include "rhi/vulkan/pipeline.h"
 #include "rhi/vulkan/resource.h"
 #include "rhi/vulkan/shader_manager.h"
+#include "renderer/triangle_renderer.h"
+#include "renderer/sky_renderer.h"
 
 
 MeadowApp::MeadowApp() 
     : Core::Application({
-        .title = "Meadow World - Vulkan 1.3",
+        .title = "Meadow World - Vulkan 1.4",
         .width = 1920,
         .height = 1080,
         .vsync = true,
@@ -36,7 +37,6 @@ void MeadowApp::OnInitialize() {
     // Теперь Device полностью инициализирован и знает семейства очередей
 
     m_shaderManager = std::make_unique<RHI::Vulkan::ShaderManager>(m_device.get());
-    m_shaderManager->EnableHotReload(true); // Включаем горячую перезагрузку для удобства разработки
 
     // 3. Load all shader programs needed for the application
     LoadShaders(); // Выносим загрузку шейдеров в отдельную функцию для чистоты
@@ -62,10 +62,18 @@ void MeadowApp::OnInitialize() {
     );
 
     // 5. Create triangle pipeline (требует Device и format от swapchain)
-    m_trianglePipeline = std::make_unique<RHI::Vulkan::TrianglePipeline>(
+    m_trianglePipeline = std::make_unique<RHI::Vulkan::TriangleRenderer>(
         m_device.get(),
         m_shaderManager.get(),
         m_swapchain->GetFormat()
+    );
+
+    // Создаем рендер неба
+    m_skyRenderer = std::make_unique<Renderer::SkyRenderer>(
+        m_device.get(),
+        m_shaderManager.get(),
+        m_swapchain->GetFormat(),
+        m_swapchain->GetDepthFormat() 
     );
 
     // 6. Create sync objects and command buffers for each frame
@@ -100,16 +108,16 @@ void MeadowApp::LoadShaders() {
 
     // Шейдерная программа для тестового треугольника
     auto* triangleProgram = m_shaderManager->CreateProgram("Triangle");
-    triangleProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/triangle.vert");
-    triangleProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/triangle.frag");
+    triangleProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/triangle.vert.spv");
+    triangleProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/triangle.frag.spv");
     if (!triangleProgram->Compile()) {
         throw std::runtime_error("Failed to compile Triangle shader program!");
     }
 
     // Шейдерная программа для скайбокса (если есть)
      auto* skyProgram = m_shaderManager->CreateProgram("Sky");
-     skyProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/sky.vert");
-     skyProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/sky.frag");
+     skyProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/sky.vert.spv");
+     skyProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/sky.frag.spv");
      if (!skyProgram->Compile()) {
          throw std::runtime_error("Failed to compile Sky shader program!");
      }
@@ -137,6 +145,7 @@ void MeadowApp::OnShutdown() {
 
     // 2. Уничтожаем высокоуровневые объекты рендера
     //if (m_skyRenderer) m_skyRenderer.reset(); // Не забудьте, если добавили
+    if (m_skyRenderer) m_skyRenderer.reset();
     if (m_trianglePipeline) m_trianglePipeline.reset();
 
     // 3. Уничтожаем менеджеры
@@ -238,26 +247,60 @@ void MeadowApp::DestroySyncObjects() {
 }
 
 void MeadowApp::RecreateSwapchain() {
-    // Handle minimization
+    // 1. Обработка минимизации окна.
+    // Если окно свернуто, его размер 0x0. Ждем, пока пользователь его развернет.
     int width = 0, height = 0;
     while (width == 0 || height == 0) {
         width = GetWindow()->GetWidth();
         height = GetWindow()->GetHeight();
         GetWindow()->PollEvents();
     }
-    
-    // Wait only for current frame to complete
-    vkWaitForFences(m_device->GetDevice(), 1, &m_frames[m_currentFrame].inFlightFence, VK_TRUE, UINT64_MAX);
-    
-    uint32_t oldImageCount = m_swapchainImageCount;
+
+    // 2. ЖДЕМ ПОЛНОГО ЗАВЕРШЕНИЯ РАБОТЫ GPU.
+    // Это самый важный и надежный шаг. Он гарантирует, что ни один из старых
+    // ресурсов swapchain'а (картинки, буфер глубины) или пайплайнов не используется.
+    // Использование vkWaitForFences здесь недостаточно и приводит к ошибкам.
+    vkDeviceWaitIdle(m_device->GetDevice());
+
+    // 3. УНИЧТОЖАЕМ ВСЕ ОБЪЕКТЫ, КОТОРЫЕ ЗАВИСЯТ ОТ SWAPCHAIN.
+    // Сюда входят все пайплайны и рендеры, так как они создавались
+    // с использованием форматов и размеров старого swapchain'а.
+    m_skyRenderer.reset();
+    m_trianglePipeline.reset();
+
+    // Также сюда могут входить фреймбуферы, если вы их используете.
+
+    // 4. ПЕРЕСОЗДАЕМ БАЗОВЫЕ РЕСУРСЫ.
+    // Эта функция уничтожит старый swapchain, его image views, старый depth buffer
+    // и создаст новые с актуальными размерами.
     m_swapchain->Recreate(width, height);
-    m_swapchainImageCount = m_swapchain->GetImageCount();
-    
-    // Check if image count changed and recreate command buffers if needed
-    if (oldImageCount != m_swapchainImageCount) {
-        DestroySyncObjects();
-        CreateSyncObjects();
-    }
+
+    // 5. ПЕРЕСОЗДАЕМ ЗАВИСИМЫЕ ОБЪЕКТЫ.
+    // Теперь, когда у нас есть новый swapchain, мы можем заново создать
+    // рендеры. Они автоматически подхватят новые форматы и размеры.
+    m_trianglePipeline = std::make_unique<RHI::Vulkan::TriangleRenderer>(
+        m_device.get(),
+        m_shaderManager.get(),
+        m_swapchain->GetFormat()
+    );
+
+    m_skyRenderer = std::make_unique<Renderer::SkyRenderer>(
+        m_device.get(),
+        m_shaderManager.get(),
+        m_swapchain->GetFormat(),
+        m_swapchain->GetDepthFormat()
+    );
+
+    // 6. СБРАСЫВАЕМ ФЛАГ.
+    m_framebufferResized = false;
+
+    // ПРИМЕЧАНИЕ: Логика с oldImageCount/DestroySyncObjects/CreateSyncObjects
+    // больше не нужна в таком виде, так как объекты синхронизации (m_frames)
+    // не зависят от swapchain'а напрямую и должны жить в течение всего
+    // времени работы приложения. Их количество определяется MAX_FRAMES_IN_FLIGHT,
+    // а не количеством картинок в swapchain.
+    // Если вам все же нужно пересоздавать командные буферы, это нужно делать
+    // отдельно, но уничтожать семафоры и фенсы здесь не следует.
 }
 
 void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
@@ -289,6 +332,29 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     depInfo.pImageMemoryBarriers = &imageBarrier;
     
     vkCmdPipelineBarrier2(cmd, &depInfo);
+
+    // --- РЕНДЕР НЕБА (ПЕРВЫМ!) ---
+    m_device->BeginDebugLabel(cmd, "Sky Pass", { 0.0f, 0.5f, 1.0f, 1.0f });
+
+    // Создаем ПРАВИЛЬНЫЕ матрицы для теста
+    float aspectRatio = static_cast<float>(m_swapchain->GetExtent().width) / static_cast<float>(m_swapchain->GetExtent().height);
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 100.0f);
+    // Vulkan использует другую систему координат для clip space, Y инвертирована
+    proj[1][1] *= -1;
+    glm::mat4 view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 invViewProj = glm::inverse(proj * view);
+    glm::vec3 cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
+
+    m_skyRenderer->Render(
+        cmd,
+        m_swapchain->GetFrame(imageIndex).imageView,
+        m_swapchain->GetDepthImageView(), // SkyRenderer'ю нужен и Depth ImageView
+        m_swapchain->GetExtent(),
+        invViewProj,
+        cameraPos
+    );
+
+    m_device->EndDebugLabel(cmd);
     
     // Debug marker
     m_device->BeginDebugLabel(cmd, "Triangle Pass", {1.0f, 0.0f, 0.0f, 1.0f});

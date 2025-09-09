@@ -485,6 +485,21 @@ void Device::BeginDebugLabel(VkCommandBuffer cmd, const char* label, const std::
     vkCmdBeginDebugUtilsLabelEXT(cmd, &labelInfo);
 }
 
+VkFormat Device::FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) const {
+    for (VkFormat format : candidates) {
+        VkFormatProperties props;
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);
+
+        if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features) {
+            return format;
+        }
+        else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features) {
+            return format;
+        }
+    }
+    throw std::runtime_error("Failed to find supported format!");
+}
+
 void Device::EndDebugLabel(VkCommandBuffer cmd) const {
     if (!m_validationEnabled) return;
     vkCmdEndDebugUtilsLabelEXT(cmd);

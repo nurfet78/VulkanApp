@@ -2,17 +2,16 @@
 #version 460
 
 layout(location = 0) in vec3 fragRayDir;
-
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
-    vec3 cameraPos;
-    float time;
+    vec4 cameraPosAndTime; // Единое поле для позиции и времени
 } pc;
 
 // Procedural sky gradient
-vec3 getSkyColor(vec3 rayDir) {
+// Теперь функция должна принимать время как аргумент, чтобы быть "чистой"
+vec3 getSkyColor(vec3 rayDir, float time) {
     float y = rayDir.y * 0.5 + 0.5;
     
     vec3 horizonColor = vec3(0.7, 0.8, 0.9);
@@ -32,15 +31,23 @@ vec3 getSkyColor(vec3 rayDir) {
     skyColor += vec3(1.0, 0.9, 0.7) * sun;
     
     // Simple clouds
-    float cloud = sin(rayDir.x * 10.0 + pc.time * 0.1) * 
-                  cos(rayDir.z * 8.0 + pc.time * 0.05);
+    // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    // Используем 'time', переданный как аргумент, а не глобальный pc.time
+    float cloud = sin(rayDir.x * 10.0 + time * 0.1) * 
+                  cos(rayDir.z * 8.0 + time * 0.05);
+    // -------------------------
     cloud = smoothstep(0.3, 0.7, cloud) * 0.1;
     skyColor = mix(skyColor, vec3(1.0), cloud * smoothstep(0.0, 0.3, rayDir.y));
     
-    return skyColor;
+    return skyColor; // <-- Убедимся, что возвращается vec3
 }
 
 void main() {
-    vec3 color = getSkyColor(normalize(fragRayDir));
+    // 1. Извлекаем время из push-константы
+    float currentTime = pc.cameraPosAndTime.w;
+    
+    // 2. Вызываем getSkyColor с обоими аргументами
+    vec3 color = getSkyColor(normalize(fragRayDir), currentTime);
+    
     outColor = vec4(color, 1.0);
 }

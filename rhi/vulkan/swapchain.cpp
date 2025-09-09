@@ -9,10 +9,12 @@ Swapchain::Swapchain(Device* device, uint32_t width, uint32_t height, bool vsync
     : m_device(device), m_vsync(vsync) {
     CreateSwapchain(width, height);
     CreateImageViews();
+    CreateDepthResources();
     CreateSyncObjects();
 }
 
 Swapchain::~Swapchain() {
+    CleanupDepthResources();
     CleanupSwapchain();
 }
 
@@ -54,9 +56,11 @@ void Swapchain::Recreate(uint32_t width, uint32_t height) {
     // Store old image count
     uint32_t oldImageCount = static_cast<uint32_t>(m_frames.size());
     
+    CleanupDepthResources();
     CleanupSwapchain();
     CreateSwapchain(width, height);
     CreateImageViews();
+    CreateDepthResources();
     CreateSyncObjects();
     
     // Check if image count changed
@@ -65,6 +69,65 @@ void Swapchain::Recreate(uint32_t width, uint32_t height) {
         // Notify that recreate changed image count
         // This should trigger command buffer recreation in app
         m_imageCountChanged = true;
+    }
+}
+
+void Swapchain::CreateDepthResources() {
+    // 1. Находим подходящий формат глубины
+    m_depthFormat = m_device->FindSupportedFormat(
+        { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+    );
+
+
+    // 2. Создаем VkImage для буфера глубины
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = m_extent.width;
+    imageInfo.extent.height = m_extent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = m_depthFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE; // VMA сама выберет лучшую память (device local)
+
+    // Создаем образ и выделяем под него память одной командой
+    vmaCreateImage(m_device->GetAllocator(), &imageInfo, &allocInfo, &m_depthImage, &m_depthImageAllocation, nullptr);
+
+    // 3. Создаем VkImageView для буфера глубины
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = m_depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VK_CHECK(vkCreateImageView(m_device->GetDevice(), &viewInfo, nullptr, &m_depthImageView));
+}
+
+void Swapchain::CleanupDepthResources() {
+    if (m_depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device->GetDevice(), m_depthImageView, nullptr);
+        m_depthImageView = VK_NULL_HANDLE;
+    }
+    if (m_depthImage != VK_NULL_HANDLE) {
+        // Уничтожаем и образ, и память, выделенную под него
+        vmaDestroyImage(m_device->GetAllocator(), m_depthImage, m_depthImageAllocation);
+        m_depthImage = VK_NULL_HANDLE;
+        m_depthImageAllocation = VK_NULL_HANDLE;
     }
 }
 

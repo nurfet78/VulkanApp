@@ -20,13 +20,8 @@ void SkyRenderer::CreatePipeline(VkFormat colorFormat, VkFormat depthFormat) {
     // 1. Указываем имя шейдерной программы
     pipelineInfo.shaderProgram = "Sky"; // Убедитесь, что она загружена в MeadowApp::LoadShaders
 
-    // 2. Настраиваем Push Constants. ReloadablePipeline сам создаст layout.
-    struct PushConstants {
-        glm::mat4 invViewProj;
-        glm::vec3 cameraPos; // В GLSL vec3 занимает место как vec4
-        float time;
-    };
-    pipelineInfo.pushConstantSize = sizeof(PushConstants);
+  
+    pipelineInfo.pushConstantSize = sizeof(SkyPushConstants);
     pipelineInfo.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // 3. Настраиваем состояние рендера
@@ -83,8 +78,11 @@ void SkyRenderer::CreateIBLResources() {
     );
 }
 
-void SkyRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent,
-                        const glm::mat4& invViewProj, const glm::vec3& cameraPos) {
+void SkyRenderer::Render(VkCommandBuffer cmd, 
+                         VkImageView targetImageView, 
+                         VkImageView depthImageView, VkExtent2D extent,
+                         const glm::mat4& invViewProj, 
+                         const glm::vec3& cameraPos) {
     // Begin rendering
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -92,6 +90,17 @@ void SkyRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExt
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // Keep previous content
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.clearValue.color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+
+    // 2. Настраиваем Depth Attachment
+    VkRenderingAttachmentInfo depthAttachment{};
+    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachment.imageView = depthImageView; // <-- ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ VIEW
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    // Глубину нужно очищать в самом начале кадра
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // Сохраняем для теста другими объектами
+    depthAttachment.clearValue.depthStencil = { 1.0f, 0 }; // Очищаем значением 1.0 (самая даль)
     
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -99,6 +108,7 @@ void SkyRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExt
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &colorAttachment;
+    renderingInfo.pDepthAttachment = &depthAttachment;
     
     vkCmdBeginRendering(cmd, &renderingInfo);
     
@@ -117,7 +127,7 @@ void SkyRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExt
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     
     // Push constants
-    struct PushConstants {
+    /*struct PushConstants {
         glm::mat4 invViewProj;
         glm::vec3 cameraPos;
         float time;
@@ -125,11 +135,16 @@ void SkyRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExt
     
     pc.invViewProj = invViewProj;
     pc.cameraPos = cameraPos;
-    pc.time = m_timeOfDay;
+    pc.time = m_timeOfDay;*/
+
+    SkyPushConstants pc;
+    pc.invViewProj = invViewProj;
+    // Упаковываем vec3 в xyz компоненты vec4, а time - в w
+    pc.cameraPos = glm::vec4(cameraPos, m_timeOfDay); // m_timeOfDay теперь в w-компоненте
     
     vkCmdPushConstants(cmd, m_pipeline->GetLayout(),
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        0, sizeof(pc), &pc);
+        0, sizeof(SkyPushConstants), &pc);
     
     // Bind pipeline and draw fullscreen triangle
     if (m_pipeline) {

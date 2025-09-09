@@ -6,7 +6,6 @@
 namespace RHI::Vulkan {
 
     class Device;
-    class Pipeline;
 
     // Shader stage info
     struct ShaderStageInfo {
@@ -15,7 +14,6 @@ namespace RHI::Vulkan {
         std::string entryPoint = "main";
         std::vector<uint32_t> spirv;
         VkShaderModule module = VK_NULL_HANDLE;
-        std::filesystem::file_time_type lastWriteTime;
     };
 
     // Shader program (collection of stages)
@@ -34,12 +32,6 @@ namespace RHI::Vulkan {
         // Get compiled modules
         const std::vector<ShaderStageInfo>& GetStages() const { return m_stages; }
         std::vector<VkPipelineShaderStageCreateInfo> GetStageCreateInfos() const;
-
-        // Check if needs recompilation
-        bool NeedsReload() const;
-
-        // Reload shaders
-        bool Reload();
 
         const std::string& GetName() const { return m_name; }
         bool IsValid() const { return m_valid; }
@@ -65,44 +57,9 @@ namespace RHI::Vulkan {
         ShaderProgram* GetProgram(const std::string& name);
         void RemoveProgram(const std::string& name);
 
-        // Hot reload
-        void EnableHotReload(bool enable);
-        bool IsHotReloadEnabled() const { return m_hotReloadEnabled; }
-
-        // Set reload callback
-        using ReloadCallback = std::function<void(const std::string& programName)>;
-        void SetReloadCallback(ReloadCallback callback) { m_reloadCallback = callback; }
-
-        // Manual reload check
-        void CheckForReloads();
-
-        // Include directories for shader compilation
-        void AddIncludePath(const std::string& path);
-
-        // Shader cache
-        void SetCachePath(const std::string& path);
-        bool LoadFromCache(const std::string& name);
-        void SaveToCache(const std::string& name);
-
     private:
-        void WatcherThread();
-        void ProcessFileChange(const std::string& path);
-
         Device* m_device;
-
         std::unordered_map<std::string, std::unique_ptr<ShaderProgram>> m_programs;
-        std::unordered_map<std::string, std::vector<std::string>> m_fileToProgramMap;
-
-        // Hot reload
-        std::atomic<bool> m_hotReloadEnabled{ false };
-        std::thread m_watcherThread;
-        std::atomic<bool> m_watcherRunning{ false };
-        std::mutex m_reloadMutex;
-        ReloadCallback m_reloadCallback;
-
-        // Shader compilation
-        std::vector<std::string> m_includePaths;
-        std::string m_cachePath;
     };
 
     // Pipeline with automatic shader reload
@@ -154,9 +111,6 @@ namespace RHI::Vulkan {
         // Get handles
         VkPipeline GetPipeline() const { return m_pipeline; }
         VkPipelineLayout GetLayout() const { return m_pipelineLayout; }
-
-        // Force reload
-        bool Reload();
 
     private:
         bool CreatePipeline();

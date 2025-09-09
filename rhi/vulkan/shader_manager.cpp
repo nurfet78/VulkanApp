@@ -42,14 +42,18 @@ namespace RHI::Vulkan {
     }
 
     bool ShaderProgram::CompileStage(ShaderStageInfo& stage) {
+        // Убеждаемся, что нам передали .spv файл.
+        if (!stage.path.ends_with(".spv")) {
+            std::cerr << "Error: CompileStage now only accepts precompiled .spv files. Received: " << stage.path << std::endl;
+            return false;
+        }
+
         if (!std::filesystem::exists(stage.path)) {
             std::cerr << "Shader file not found: " << stage.path << std::endl;
             return false;
         }
 
-        stage.lastWriteTime = std::filesystem::last_write_time(stage.path);
-
-        // Читаем исходный код из файла
+        // Читаем бинарный SPIR-V файл
         std::ifstream file(stage.path, std::ios::ate | std::ios::binary);
         if (!file.is_open()) {
             std::cerr << "Failed to open shader file: " << stage.path << std::endl;
@@ -57,39 +61,27 @@ namespace RHI::Vulkan {
         }
 
         size_t fileSize = static_cast<size_t>(file.tellg());
-        std::vector<char> buffer(fileSize);
-        file.seekg(0);
-        file.read(buffer.data(), fileSize);
-        file.close();
-
-        // Проверяем, является ли файл уже скомпилированным SPIR-V
-        if (stage.path.ends_with(".spv")) {
-            // Убедимся, что размер файла кратен 4 байтам
-            if (fileSize % sizeof(uint32_t) != 0) {
-                std::cerr << "Invalid SPIR-V file size: " << stage.path << std::endl;
-                return false;
-            }
-            stage.spirv.resize(fileSize / sizeof(uint32_t));
-            memcpy(stage.spirv.data(), buffer.data(), fileSize);
-        }
-        else {
-            // Компилируем GLSL в SPIR-V
-            std::string source(buffer.begin(), buffer.end());
-            stage.spirv = CompileGLSL(source, stage.stage, stage.path);
-            if (stage.spirv.empty()) {
-                return false;
-            }
-        }
-
-        if (stage.spirv.empty()) {
+        if (fileSize % sizeof(uint32_t) != 0) {
+            std::cerr << "Invalid SPIR-V file size: " << stage.path << std::endl;
             return false;
         }
 
-        // Уничтожаем старый модуль, если он был
+        stage.spirv.resize(fileSize / sizeof(uint32_t));
+        file.seekg(0);
+        file.read(reinterpret_cast<char*>(stage.spirv.data()), fileSize);
+        file.close();
+
+        if (stage.spirv.empty()) {
+            std::cerr << "Failed to read SPIR-V code from: " << stage.path << std::endl;
+            return false;
+        }
+
+        // Уничтожаем старый модуль, если он был (нужно для ReloadablePipeline)
         if (stage.module != VK_NULL_HANDLE) {
             vkDestroyShaderModule(m_device->GetDevice(), stage.module, nullptr);
         }
 
+        // Создаем VkShaderModule из загруженного кода
         VkShaderModuleCreateInfo moduleInfo{};
         moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         moduleInfo.codeSize = stage.spirv.size() * sizeof(uint32_t);
@@ -143,22 +135,6 @@ namespace RHI::Vulkan {
         return { result.cbegin(), result.cend() };
     }
 
-    bool ShaderProgram::NeedsReload() const {
-        for (const auto& stage : m_stages) {
-            if (std::filesystem::exists(stage.path)) {
-                auto currentTime = std::filesystem::last_write_time(stage.path);
-                if (currentTime > stage.lastWriteTime) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    bool ShaderProgram::Reload() {
-        std::cout << "Reloading shader program: " << m_name << std::endl;
-        return Compile();
-    }
 
     std::vector<VkPipelineShaderStageCreateInfo> ShaderProgram::GetStageCreateInfos() const {
         std::vector<VkPipelineShaderStageCreateInfo> infos;
@@ -186,7 +162,6 @@ namespace RHI::Vulkan {
     ShaderManager::ShaderManager(Device* device) : m_device(device) {}
 
     ShaderManager::~ShaderManager() {
-        EnableHotReload(false); // Корректно останавливаем поток
     }
 
     ShaderProgram* ShaderManager::CreateProgram(const std::string& name) {
@@ -204,62 +179,6 @@ namespace RHI::Vulkan {
     void ShaderManager::RemoveProgram(const std::string& name) {
         m_programs.erase(name);
     }
-
-    void ShaderManager::EnableHotReload(bool enable) {
-        if (enable && !m_hotReloadEnabled.load()) {
-            m_hotReloadEnabled = true;
-            m_watcherRunning = true;
-            m_watcherThread = std::thread(&ShaderManager::WatcherThread, this);
-        }
-        else if (!enable && m_hotReloadEnabled.load()) {
-            m_hotReloadEnabled = false;
-            m_watcherRunning = false;
-            if (m_watcherThread.joinable()) {
-                m_watcherThread.join();
-            }
-        }
-    }
-
-    void ShaderManager::CheckForReloads() {
-        std::lock_guard lock(m_reloadMutex);
-        for (auto& [name, program] : m_programs) {
-            if (program->NeedsReload()) {
-                if (program->Reload()) {
-                    std::cout << "Shader program '" << name << "' reloaded successfully." << std::endl;
-                    if (m_reloadCallback) {
-                        m_reloadCallback(name);
-                    }
-                }
-                else {
-                    std::cerr << "Failed to reload shader program: " << name << std::endl;
-                }
-            }
-        }
-    }
-
-    void ShaderManager::WatcherThread() {
-        while (m_watcherRunning) {
-            if (m_hotReloadEnabled) {
-                CheckForReloads();
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-    }
-
-    void ShaderManager::AddIncludePath(const std::string& path) {
-        m_includePaths.push_back(path);
-    }
-
-    void ShaderManager::SetCachePath(const std::string& path) {
-        m_cachePath = path;
-        if (!path.empty()) {
-            std::filesystem::create_directories(path);
-        }
-    }
-    // Функции кэширования LoadFromCache и SaveToCache не реализованы,
-    // но их можно добавить, если потребуется.
-    bool ShaderManager::LoadFromCache(const std::string& name) { return false; }
-    void ShaderManager::SaveToCache(const std::string& name) {}
 
     // ReloadablePipeline implementation
     ReloadablePipeline::ReloadablePipeline(Device* device, ShaderManager* shaderManager)
@@ -460,18 +379,6 @@ namespace RHI::Vulkan {
         if (m_pipeline) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
         }
-    }
-
-    bool ReloadablePipeline::Reload() {
-        if (!m_shaderProgram) return false;
-
-        std::cout << "Reloading pipeline for shader: " << m_createInfo.shaderProgram << std::endl;
-
-        if (m_shaderProgram->Reload()) {
-            return CreatePipeline();
-        }
-
-        return false;
     }
 
 } // namespace RHI::Vulkan

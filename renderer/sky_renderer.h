@@ -13,6 +13,16 @@ namespace RHI::Vulkan {
 
 namespace Renderer {
 
+    // —труктура дл€ push-констант. ƒолжна точно соответствовать
+    // layout(push_constant) в шейдере.
+    struct SkyPushConstants {
+        glm::mat4 invViewProj;
+        // »спользуем glm::vec4, чтобы избежать проблем с выравниванием.
+        // Ўейдер ожидает, что cameraPos будет занимать 16 байт.
+        // glm::vec3 занимает 12, что приведет к сдвигу и неверным данным.
+        glm::vec4 cameraPos; // »спользуем vec4, в w-компоненту можно записать time
+    };
+
 class SkyRenderer {
 public:
     enum class SkyType {
@@ -31,8 +41,11 @@ public:
     void SetSunDirection(const glm::vec3& direction) { m_sunDirection = glm::normalize(direction); }
     void SetTimeOfDay(float time) { m_timeOfDay = time; }
     
-    void Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent,
-               const glm::mat4& invViewProj, const glm::vec3& cameraPos);
+    void Render(VkCommandBuffer cmd,
+        VkImageView targetImageView,
+        VkImageView depthImageView, VkExtent2D extent,
+        const glm::mat4& invViewProj,
+        const glm::vec3& cameraPos);
     
     // IBL generation
     void GenerateEnvironmentMaps(VkCommandBuffer cmd);

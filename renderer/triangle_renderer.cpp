@@ -1,12 +1,11 @@
-// engine/rhi/vulkan/pipeline.cpp
-#include "pipeline.h"
-#include "device.h"
+#include "triangle_renderer.h"
+#include "rhi/vulkan/device.h"
 #include "rhi/vulkan/shader_manager.h"
 
 namespace RHI::Vulkan {
 
 
-TrianglePipeline::TrianglePipeline(Device* device, ShaderManager* shaderManager, VkFormat colorFormat) : m_device(device) {
+    TriangleRenderer::TriangleRenderer(Device* device, ShaderManager* shaderManager, VkFormat colorFormat) : m_device(device) {
 
     // 1. Описываем конфигурацию нашего пайплайна
     ReloadablePipeline::CreateInfo pipelineInfo{};
@@ -16,7 +15,9 @@ TrianglePipeline::TrianglePipeline(Device* device, ShaderManager* shaderManager,
 
     // Настройки пайплайна (взяты из старого кода)
     pipelineInfo.colorFormat = colorFormat;
+    pipelineInfo.depthFormat = VK_FORMAT_UNDEFINED;
     pipelineInfo.depthTestEnable = false;
+    pipelineInfo.depthWriteEnable = false;
     pipelineInfo.cullMode = VK_CULL_MODE_NONE;
     pipelineInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
@@ -32,13 +33,13 @@ TrianglePipeline::TrianglePipeline(Device* device, ShaderManager* shaderManager,
 }
 
 
-void TrianglePipeline::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent) {
+void TriangleRenderer::Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent) {
     // Begin dynamic rendering
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachment.imageView = targetImageView;
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.clearValue.color = {{0.1f, 0.1f, 0.2f, 1.0f}};
     

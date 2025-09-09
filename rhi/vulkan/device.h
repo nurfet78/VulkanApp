@@ -85,6 +85,8 @@ public:
     void SetObjectName(uint64_t object, VkObjectType type, const char* name) const;
     void BeginDebugLabel(VkCommandBuffer cmd, const char* label, const std::array<float, 4>& color = {1, 1, 1, 1}) const;
     void EndDebugLabel(VkCommandBuffer cmd) const;
+
+    VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) const;
     
     void WaitIdle() const { vkDeviceWaitIdle(m_device); }
 

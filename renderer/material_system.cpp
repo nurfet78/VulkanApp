@@ -1,6 +1,5 @@
 // engine/renderer/material_system.cpp
 #include "material_system.h"
-#include "rhi/vulkan/pipeline.h"
 #include "rhi/vulkan/resource.h"
 #include "rhi/vulkan/descriptor_allocator.h"
 

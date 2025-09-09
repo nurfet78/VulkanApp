@@ -11,8 +11,12 @@ namespace RHI::Vulkan {
     class Swapchain;
     class CommandPoolManager;
     class ResourceManager;
-    class TrianglePipeline;
+    class TriangleRenderer;
     class ShaderManager;
+}
+
+namespace Renderer {
+    class SkyRenderer;
 }
 
 class MeadowApp : public Core::Application {
@@ -50,7 +54,8 @@ private:
     std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
     std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
     std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;
-    std::unique_ptr<RHI::Vulkan::TrianglePipeline> m_trianglePipeline;
+    std::unique_ptr<RHI::Vulkan::TriangleRenderer> m_trianglePipeline;
+    std::unique_ptr<Renderer::SkyRenderer> m_skyRenderer;
     
     // Frame data
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> m_frames{};

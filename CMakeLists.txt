@@ -29,12 +29,12 @@ set(SRC
     renderer/material_system.cpp
     renderer/shadow_mapper.cpp
     renderer/sky_renderer.cpp
+    renderer/triangle_renderer.cpp
     rhi/vulkan/async_resource_loader.cpp
     rhi/vulkan/command_buffer_optimizer.cpp
     rhi/vulkan/command_pool.cpp
     rhi/vulkan/descriptor_allocator.cpp
     rhi/vulkan/device.cpp
-    rhi/vulkan/pipeline.cpp
     rhi/vulkan/resource.cpp
     rhi/vulkan/shader_manager.cpp
     rhi/vulkan/staging_buffer_pool.cpp

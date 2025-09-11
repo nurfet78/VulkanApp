@@ -21,6 +21,9 @@ Device::Device(Core::Window* window, bool enableValidation)
 }
 
 Device::~Device() noexcept {
+
+    m_descriptorAllocator.~DescriptorAllocator(); // очищает пулы
+
     // Critical: Correct destruction order
     if (m_allocator) {
         vmaDestroyAllocator(m_allocator);

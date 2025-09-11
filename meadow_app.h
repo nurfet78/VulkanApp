@@ -48,6 +48,11 @@ private:
 
     void LoadShaders();
 
+    void Update();
+    void UpdateCamera();
+
+    GLFWwindow* m_window = nullptr;
+
     // Core Vulkan objects
     std::unique_ptr<RHI::Vulkan::Device> m_device;
     std::unique_ptr<RHI::Vulkan::ShaderManager> m_shaderManager;
@@ -56,6 +61,16 @@ private:
     std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;
     std::unique_ptr<RHI::Vulkan::TriangleRenderer> m_trianglePipeline;
     std::unique_ptr<Renderer::SkyRenderer> m_skyRenderer;
+
+    // Камера
+    glm::vec3 m_cameraPos = glm::vec3(0.0f, 2.0f, 5.0f);
+    glm::vec3 m_cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+    float m_cameraRotationX = 0.0f;
+    float m_cameraRotationY = 0.0f;
+
+    // Время
+    float m_deltaTime = 0.0f;
+    float m_lastFrameTime = 0.0f;
     
     // Frame data
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> m_frames{};

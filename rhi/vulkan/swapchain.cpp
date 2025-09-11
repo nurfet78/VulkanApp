@@ -50,19 +50,20 @@ VkResult Swapchain::Present(uint32_t imageIndex) {
 }
 
 void Swapchain::Recreate(uint32_t width, uint32_t height) {
+    vkDeviceWaitIdle(m_device->GetDevice());
     // Wait for current frame fence instead of device idle
     WaitForFence(m_currentFrame, UINT64_MAX);
-    
+
     // Store old image count
     uint32_t oldImageCount = static_cast<uint32_t>(m_frames.size());
-    
+
     CleanupDepthResources();
     CleanupSwapchain();
     CreateSwapchain(width, height);
     CreateImageViews();
     CreateDepthResources();
     CreateSyncObjects();
-    
+
     // Check if image count changed
     uint32_t newImageCount = static_cast<uint32_t>(m_frames.size());
     if (oldImageCount != newImageCount) {
@@ -71,6 +72,7 @@ void Swapchain::Recreate(uint32_t width, uint32_t height) {
         m_imageCountChanged = true;
     }
 }
+
 
 void Swapchain::CreateDepthResources() {
     // 1. Находим подходящий формат глубины

@@ -3,8 +3,6 @@
 
 #include "pch.h"
 
-
-
 // Forward declarations - не включаем vulkan напрямую
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;

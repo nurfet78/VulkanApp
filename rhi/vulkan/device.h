@@ -2,6 +2,7 @@
 #pragma once
 
 #include "vulkan_common.h"
+#include "rhi/vulkan/descriptor_allocator.h"
 
 namespace Core { class Window; }
 
@@ -18,6 +19,7 @@ struct DeviceFeatures {
     bool rayTracing = false;
     bool variableRateShading = false;
 };
+
 
 class Device {
 public:
@@ -36,6 +38,9 @@ public:
     VkDevice GetDevice() const { return m_device; }
     VkSurfaceKHR GetSurface() const { return m_surface; }
     VmaAllocator GetAllocator() const { return m_allocator; }
+
+    RHI::Vulkan::DescriptorAllocator* GetDescriptorAllocator() { return &m_descriptorAllocator; }
+    RHI::Vulkan::DescriptorLayoutCache* GetDescriptorLayoutCache() { return &m_descriptorLayoutCache; }
     
     // Thread-safe queue access with submit mutex
     VkQueue GetGraphicsQueue() const { return m_graphicsQueue; }
@@ -133,6 +138,9 @@ private:
     
     VmaAllocator m_allocator = VK_NULL_HANDLE;
     
+    DescriptorAllocator m_descriptorAllocator{ this };
+    DescriptorLayoutCache m_descriptorLayoutCache{ this };
+
     bool m_validationEnabled = false;
     
     const std::vector<const char*> m_deviceExtensions = {

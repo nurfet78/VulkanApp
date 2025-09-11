@@ -18,8 +18,8 @@
 MeadowApp::MeadowApp() 
     : Core::Application({
         .title = "Meadow World - Vulkan 1.4",
-        .width = 1920,
-        .height = 1080,
+        .width = 920,
+        .height = 780,
         .vsync = true,
         .fullscreen = false,
         .workerThreads = std::thread::hardware_concurrency() - 1
@@ -30,6 +30,12 @@ MeadowApp::~MeadowApp() noexcept = default;
 
 void MeadowApp::OnInitialize() {
     std::cout << "Initializing Meadow World..." << std::endl;
+
+    m_window = GetWindow()->GetHandle();
+
+    if (!m_window) {
+        throw std::runtime_error("Failed to get window handle!");
+    }
 
     // 1. Initialize Vulkan Device first (это создает instance, surface, physical device, logical device)
     m_device = std::make_unique<RHI::Vulkan::Device>(GetWindow(), true);
@@ -76,6 +82,8 @@ void MeadowApp::OnInitialize() {
         m_swapchain->GetDepthFormat() 
     );
 
+    m_skyRenderer->ConfigureSky();
+
     // 6. Create sync objects and command buffers for each frame
     CreateSyncObjects();
 
@@ -101,6 +109,52 @@ void MeadowApp::OnInitialize() {
     std::cout << "Swapchain Images: " << m_swapchain->GetImageCount() << " (Triple Buffering)" << std::endl;
     std::cout << "Frames in Flight: " << MAX_FRAMES_IN_FLIGHT << std::endl;
     std::cout << "Worker Threads: " << GetJobSystem()->GetThreadCount() << std::endl;
+}
+
+void MeadowApp::Update() {
+    // Вычисляем delta time
+    float currentTime = glfwGetTime(); // или другой источник времени
+    m_deltaTime = currentTime - m_lastFrameTime;
+    m_lastFrameTime = currentTime;
+
+    // Обновляем небо (для анимации облаков и времени дня)
+    m_skyRenderer->Update(m_deltaTime);
+
+    // Обработка ввода для камеры
+    UpdateCamera();
+
+    // Управление временем дня с клавиатуры (опционально)
+    if (glfwGetKey(m_window, GLFW_KEY_T) == GLFW_PRESS) {
+        float time = m_skyRenderer->GetTimeOfDay();
+        time += m_deltaTime * 2.0f; // 2 часа в секунду
+        if (time >= 24.0f) time -= 24.0f;
+        m_skyRenderer->SetTimeOfDay(time);
+    }
+}
+
+void MeadowApp::UpdateCamera() {
+    // Вращение камеры мышью
+    if (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+        double xpos, ypos;
+        glfwGetCursorPos(m_window, &xpos, &ypos);
+
+        static double lastX = xpos, lastY = ypos;
+        double deltaX = xpos - lastX;
+        double deltaY = ypos - lastY;
+
+        m_cameraRotationY += deltaX * 0.01f;
+        m_cameraRotationX += deltaY * 0.01f;
+        m_cameraRotationX = glm::clamp(m_cameraRotationX, -1.5f, 1.5f);
+
+        lastX = xpos;
+        lastY = ypos;
+    }
+
+    // Обновляем позицию камеры на основе вращения
+    float distance = 5.0f;
+    m_cameraPos.x = distance * sin(m_cameraRotationY) * cos(m_cameraRotationX);
+    m_cameraPos.y = distance * sin(m_cameraRotationX);
+    m_cameraPos.z = distance * cos(m_cameraRotationY) * cos(m_cameraRotationX);
 }
 
 void MeadowApp::LoadShaders() {
@@ -169,6 +223,8 @@ void MeadowApp::OnShutdown() {
 
 void MeadowApp::OnUpdate(float deltaTime) {
     m_totalTime += deltaTime;
+
+    Update();
     
     // FPS counter
     m_frameCounter++;
@@ -265,6 +321,7 @@ void MeadowApp::RecreateSwapchain() {
     // 3. УНИЧТОЖАЕМ ВСЕ ОБЪЕКТЫ, КОТОРЫЕ ЗАВИСЯТ ОТ SWAPCHAIN.
     // Сюда входят все пайплайны и рендеры, так как они создавались
     // с использованием форматов и размеров старого swapchain'а.
+
     m_skyRenderer.reset();
     m_trianglePipeline.reset();
 
@@ -274,6 +331,7 @@ void MeadowApp::RecreateSwapchain() {
     // Эта функция уничтожит старый swapchain, его image views, старый depth buffer
     // и создаст новые с актуальными размерами.
     m_swapchain->Recreate(width, height);
+
 
     // 5. ПЕРЕСОЗДАЕМ ЗАВИСИМЫЕ ОБЪЕКТЫ.
     // Теперь, когда у нас есть новый swapchain, мы можем заново создать
@@ -290,6 +348,10 @@ void MeadowApp::RecreateSwapchain() {
         m_swapchain->GetFormat(),
         m_swapchain->GetDepthFormat()
     );
+
+    if (m_skyRenderer) {
+        m_skyRenderer->RecreateSwapchainResources();
+    }
 
     // 6. СБРАСЫВАЕМ ФЛАГ.
     m_framebufferResized = false;
@@ -333,25 +395,42 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     
     vkCmdPipelineBarrier2(cmd, &depInfo);
 
-    // --- РЕНДЕР НЕБА (ПЕРВЫМ!) ---
-    m_device->BeginDebugLabel(cmd, "Sky Pass", { 0.0f, 0.5f, 1.0f, 1.0f });
+    // ============================================
+        // 1. Рендерим небо (первым!)
+        // ============================================
 
-    // Создаем ПРАВИЛЬНЫЕ матрицы для теста
-    float aspectRatio = static_cast<float>(m_swapchain->GetExtent().width) / static_cast<float>(m_swapchain->GetExtent().height);
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 100.0f);
-    // Vulkan использует другую систему координат для clip space, Y инвертирована
-    proj[1][1] *= -1;
-    glm::mat4 view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::mat4 invViewProj = glm::inverse(proj * view);
-    glm::vec3 cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
+    m_device->BeginDebugLabel(cmd, "Sky Pass", { 0.3f, 0.6f, 1.0f, 1.0f });
 
+    // Вычисляем матрицы
+    float aspectRatio = static_cast<float>(m_swapchain->GetExtent().width) /
+        static_cast<float>(m_swapchain->GetExtent().height);
+
+    glm::mat4 projection = glm::perspective(
+        glm::radians(60.0f),  // FOV
+        aspectRatio,
+        0.1f,                 // Near plane
+        1000.0f              // Far plane
+    );
+    projection[1][1] *= -1;  // Flip Y для Vulkan
+
+    glm::mat4 view = glm::lookAt(
+        m_cameraPos,
+        m_cameraTarget,
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
+
+    // Для неба нужна только матрица вращения (без перемещения)
+    glm::mat4 viewRotationOnly = glm::mat4(glm::mat3(view));
+
+    // Рендерим небо
     m_skyRenderer->Render(
         cmd,
         m_swapchain->GetFrame(imageIndex).imageView,
-        m_swapchain->GetDepthImageView(), // SkyRenderer'ю нужен и Depth ImageView
+        m_swapchain->GetDepthImageView(),
         m_swapchain->GetExtent(),
-        invViewProj,
-        cameraPos
+        projection,
+        viewRotationOnly,
+        m_cameraPos
     );
 
     m_device->EndDebugLabel(cmd);

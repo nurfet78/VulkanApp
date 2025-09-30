@@ -6,19 +6,25 @@
 #include "device.h"
 #include "command_pool.h"
 #include "staging_buffer_pool.h"
+#include "core/core_context.h"
 
 
 namespace RHI::Vulkan {
 
 // Buffer implementation
-Buffer::Buffer(Device* device, VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
+Buffer::Buffer(Device* device, VkDeviceSize size, VkBufferUsageFlags2 usage, VmaMemoryUsage memoryUsage)
     : m_device(device), m_size(size) {
+
+    VkBufferUsageFlags2CreateInfo usageInfo{};
+    usageInfo.sType = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO;
+    usageInfo.usage = usage;
     
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = size;
-    bufferInfo.usage = usage;
+    bufferInfo.usage = 0;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    bufferInfo.pNext = &usageInfo;
     
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = memoryUsage;
@@ -68,11 +74,30 @@ void Buffer::Unmap() {
 }
 
 void Buffer::Upload(const void* data, VkDeviceSize size, VkDeviceSize offset) {
-    void* mapped = Map();
-    memcpy(static_cast<char*>(mapped) + offset, data, size);
-    
-    // Flush if not coherent
-    VK_CHECK(vmaFlushAllocation(m_device->GetAllocator(), m_allocation, offset, size));
+    // Получаем флаги памяти
+    VkMemoryPropertyFlags memFlags;
+    vmaGetAllocationMemoryProperties(m_device->GetAllocator(), m_allocation, &memFlags);
+
+    if (memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+        // Мапим 
+        void* mapped = Map();
+        memcpy(static_cast<char*>(mapped) + offset, data, size);
+
+        // Flush для non-coherent памяти
+        if (!(memFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            VK_CHECK(vmaFlushAllocation(m_device->GetAllocator(), m_allocation, offset, size));
+            Unmap(); // размапиваем non-coherent память
+        }
+        // Для host-coherent память остаётся замапленной
+    }
+    else {
+        // Для device-local буферов без host-visible нельзя напрямую писать
+        throw std::runtime_error("Buffer is not host-visible, use staging buffer for upload");
+    }
+}
+
+void Buffer::Update(const void* data, VkDeviceSize size, VkDeviceSize offset) {
+    Upload(data, size, offset);
 }
 
 VkDeviceAddress Buffer::GetDeviceAddress() const {
@@ -134,52 +159,97 @@ void Buffer::CopyFromImmediate(CommandPool* pool, Buffer* srcBuffer, VkDeviceSiz
 }
 
 // Image implementation
-Image::Image(Device* device, uint32_t width, uint32_t height, VkFormat format,
-             VkImageUsageFlags usage, VkImageAspectFlags aspectFlags)
-    : m_device(device), m_width(width), m_height(height), m_format(format) {
-    
-    // Calculate mip levels for color textures
-    if (usage & VK_IMAGE_USAGE_SAMPLED_BIT && aspectFlags == VK_IMAGE_ASPECT_COLOR_BIT) {
-        m_mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
-    } else {
-        m_mipLevels = 1;
-    }
-    
+Image::Image(Device* device,
+    uint32_t width,
+    uint32_t height,
+    uint32_t depth,
+    uint32_t arrayLayers,
+    VkFormat format,
+    VkImageUsageFlags usage,
+    VkImageType imageType,
+    VkImageTiling tiling,
+    VkImageLayout initialLayout,
+    VkSampleCountFlagBits samples,
+    VkImageAspectFlags aspectFlags,
+    VmaMemoryUsage memoryUsage,
+    VkSharingMode sharingMode,
+    uint32_t queueFamilyIndexCount,
+    const uint32_t* pQueueFamilyIndices,
+    VkImageCreateFlags flags)
+    : m_device(device),
+    m_format(format)
+{
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.imageType = imageType;
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = m_mipLevels;
-    imageInfo.arrayLayers = 1;
+    imageInfo.extent.depth = (imageType == VK_IMAGE_TYPE_3D ? depth : 1);
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = (imageType == VK_IMAGE_TYPE_3D ? 1 : arrayLayers);
     imageInfo.format = format;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.tiling = tiling;
+    imageInfo.initialLayout = initialLayout;
     imageInfo.usage = usage;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    
+    imageInfo.samples = samples;
+    imageInfo.sharingMode = sharingMode;
+    imageInfo.queueFamilyIndexCount = queueFamilyIndexCount;
+    imageInfo.pQueueFamilyIndices = pQueueFamilyIndices;
+    imageInfo.flags = flags;
+
     VmaAllocationCreateInfo allocInfo{};
-    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    
-    VK_CHECK(vmaCreateImage(m_device->GetAllocator(), &imageInfo, &allocInfo,
-                           &m_image, &m_allocation, nullptr));
-    
-    // Create image view
+    allocInfo.usage = memoryUsage;
+
+    if (vmaCreateImage(m_device->GetAllocator(), &imageInfo, &allocInfo, &m_image, &m_allocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan image");
+    }
+
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = (imageType == VK_IMAGE_TYPE_2D ? VK_IMAGE_VIEW_TYPE_2D :
+        imageType == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D :
+        VK_IMAGE_VIEW_TYPE_2D);
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = m_mipLevels;
+    viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-    
-    VK_CHECK(vkCreateImageView(m_device->GetDevice(), &viewInfo, nullptr, &m_imageView));
+    viewInfo.subresourceRange.layerCount = (imageType == VK_IMAGE_TYPE_3D ? 1 : arrayLayers);
+
+    if (vkCreateImageView(m_device->GetDevice(), &viewInfo, nullptr, &m_imageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create image view");
+    }
 }
+
+// Короткий конструктор для 2D изображений
+Image::Image(Device* device,
+    uint32_t width,
+    uint32_t height,
+    VkFormat format,
+    VkImageUsageFlags usage,
+    VkImageAspectFlags aspectFlags)
+    : Image(device,
+        width,
+        height,
+        1,                      // depth всегда 1 для 2D
+        1,                      // arrayLayers по умолчанию 1
+        format,
+        usage,
+        VK_IMAGE_TYPE_2D,       // imageType
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_SAMPLE_COUNT_1_BIT,
+        aspectFlags,
+        VMA_MEMORY_USAGE_GPU_ONLY,
+        VK_SHARING_MODE_EXCLUSIVE,
+        0,                      // queueFamilyIndexCount
+        nullptr,                // pQueueFamilyIndices
+        0)                      // flags
+{
+    // Это просто вызов полного конструктора с типовыми параметрами
+}
+
 
 Image::~Image() {
     if (m_imageView) {
@@ -190,7 +260,15 @@ Image::~Image() {
     }
 }
 
-void Image::TransitionLayout(VkCommandBuffer cmd, VkImageLayout oldLayout, VkImageLayout newLayout) {
+void Image::TransitionLayout(
+    VkCommandBuffer cmd,
+    VkImageLayout oldLayout,
+    VkImageLayout newLayout,
+    uint32_t baseMipLevel,
+    uint32_t levelCount,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount
+) {
     VkImageMemoryBarrier2 barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     barrier.oldLayout = oldLayout;
@@ -198,32 +276,163 @@ void Image::TransitionLayout(VkCommandBuffer cmd, VkImageLayout oldLayout, VkIma
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = m_image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = m_mipLevels;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    
-    // Set stage and access masks based on layouts
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-        barrier.srcAccessMask = 0;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    barrier.subresourceRange.baseMipLevel = baseMipLevel;
+    barrier.subresourceRange.levelCount = levelCount;
+    barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
+    barrier.subresourceRange.layerCount = layerCount;
+
+    // --- Определение aspectMask ---
+    VkFormat format = m_format;
+    barrier.subresourceRange.aspectMask = 0;
+
+    switch (format) {
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        break;
+
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        break;
+
+    default:
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        break;
     }
-    
+
+    // --- Хелпер для выбора стадий/доступа ---
+    auto getStageAccess = [](VkImageLayout layout, VkPipelineStageFlags2& stageMask, VkAccessFlags2& accessMask) {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_UNDEFINED:
+            stageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            accessMask = 0;
+            break;
+
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            accessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            break;
+
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            accessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            break;
+
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            accessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            break;
+
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            accessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            break;
+
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            // Универсальный вариант — безопасен и для graphics, и для transfer
+            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            accessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            break;
+
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+            stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+            accessMask = 0;
+            break;
+
+        default:
+            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            accessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            break;
+        }
+    };
+
+    // --- Установка src/dst масок ---
+    getStageAccess(oldLayout, barrier.srcStageMask, barrier.srcAccessMask);
+    getStageAccess(newLayout, barrier.dstStageMask, barrier.dstAccessMask);
+
+    // --- Вызов ---
     VkDependencyInfo depInfo{};
     depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     depInfo.imageMemoryBarrierCount = 1;
     depInfo.pImageMemoryBarriers = &barrier;
-    
+
     vkCmdPipelineBarrier2(cmd, &depInfo);
 }
+
+void Image::TransitionLayout(VkImageLayout oldLayout, VkImageLayout newLayout, Core::CoreContext* context) {
+
+    VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommands();
+
+    TransitionLayout(cmd, oldLayout, newLayout, 0, 1, 0, 1);
+
+    context->GetCommandPoolManager()->EndSingleTimeCommands(cmd);
+}
+
+void Image::GenerateMipmaps(VkCommandBuffer cmd) {
+    // Проверим, поддерживает ли формат блиты
+    VkFormatProperties formatProperties;
+    vkGetPhysicalDeviceFormatProperties(m_device->GetPhysicalDevice(), m_format, &formatProperties);
+
+    if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+        throw std::runtime_error("Image format does not support linear blitting for mipmaps!");
+    }
+
+    int32_t mipWidth = m_width;
+    int32_t mipHeight = m_height;
+
+    for (uint32_t i = 1; i < m_mipLevels; i++) {
+        // mip[i - 1] → TRANSFER_SRC
+        TransitionLayout(cmd,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            i - 1, 1, 0, 1);
+
+        // mip[i] → TRANSFER_DST
+        TransitionLayout(cmd,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            i, 1, 0, 1);
+
+        // --- Blit ---
+        VkImageBlit blit{};
+        blit.srcOffsets[0] = { 0, 0, 0 };
+        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.srcSubresource.baseArrayLayer = 0;
+        blit.srcSubresource.layerCount = 1;
+
+        blit.dstOffsets[0] = { 0, 0, 0 };
+        blit.dstOffsets[1] = {
+            std::max(1, mipWidth / 2),
+            std::max(1, mipHeight / 2),
+            1
+        };
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.mipLevel = i;
+        blit.dstSubresource.baseArrayLayer = 0;
+        blit.dstSubresource.layerCount = 1;
+
+        vkCmdBlitImage(cmd,
+            m_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit, VK_FILTER_LINEAR);
+
+        // уменьшаем размеры для следующего уровня
+        mipWidth = std::max(1, mipWidth / 2);
+        mipHeight = std::max(1, mipHeight / 2);
+    }
+
+    // Все уровни переводим в SHADER_READ_ONLY_OPTIMAL
+    TransitionLayout(cmd,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        0, m_mipLevels, 0, 1);
+}
+
+
 
 // Sampler implementation
 Sampler::Sampler(Device* device, VkFilter filter, VkSamplerAddressMode addressMode,
@@ -266,13 +475,13 @@ void Mesh::UploadToGPU(Device* device, CommandPool* commandPool,
     // Create GPU buffers
     vertexBuffer = std::make_unique<Buffer>(
         device, vertexBufferSize,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_BUFFER_USAGE_2_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
         VMA_MEMORY_USAGE_GPU_ONLY
     );
     
     indexBuffer = std::make_unique<Buffer>(
         device, indexBufferSize,
-        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
         VMA_MEMORY_USAGE_GPU_ONLY
     );
     
@@ -393,56 +602,73 @@ Mesh* ResourceManager::CreatePlaneMesh() {
 }
 
 Mesh* ResourceManager::CreateCubeMesh() {
+    // 24 вершины — 4 на каждую грань, с нормалями и UV
+    Vertex cubeVertices[24] = {
+        // Front (Z-)
+        {{-0.5f,-0.5f,-0.5f}, {0,0,-1}, {0,0}, {}},
+        {{ 0.5f,-0.5f,-0.5f}, {0,0,-1}, {1,0}, {}},
+        {{ 0.5f, 0.5f,-0.5f}, {0,0,-1}, {1,1}, {}},
+        {{-0.5f, 0.5f,-0.5f}, {0,0,-1}, {0,1}, {}},
+
+        // Back (Z+)
+        {{ 0.5f,-0.5f, 0.5f}, {0,0,1}, {0,0}, {}},
+        {{-0.5f,-0.5f, 0.5f}, {0,0,1}, {1,0}, {}},
+        {{-0.5f, 0.5f, 0.5f}, {0,0,1}, {1,1}, {}},
+        {{ 0.5f, 0.5f, 0.5f}, {0,0,1}, {0,1}, {}},
+
+        // Left (X-)
+        {{-0.5f,-0.5f, 0.5f}, {-1,0,0}, {0,0}, {}},
+        {{-0.5f,-0.5f,-0.5f}, {-1,0,0}, {1,0}, {}},
+        {{-0.5f, 0.5f,-0.5f}, {-1,0,0}, {1,1}, {}},
+        {{-0.5f, 0.5f, 0.5f}, {-1,0,0}, {0,1}, {}},
+
+        // Right (X+)
+        {{ 0.5f,-0.5f,-0.5f}, {1,0,0}, {0,0}, {}},
+        {{ 0.5f,-0.5f, 0.5f}, {1,0,0}, {1,0}, {}},
+        {{ 0.5f, 0.5f, 0.5f}, {1,0,0}, {1,1}, {}},
+        {{ 0.5f, 0.5f,-0.5f}, {1,0,0}, {0,1}, {}},
+
+        // Top (Y+)
+        {{-0.5f, 0.5f,-0.5f}, {0,1,0}, {0,0}, {}},
+        {{ 0.5f, 0.5f,-0.5f}, {0,1,0}, {1,0}, {}},
+        {{ 0.5f, 0.5f, 0.5f}, {0,1,0}, {1,1}, {}},
+        {{-0.5f, 0.5f, 0.5f}, {0,1,0}, {0,1}, {}},
+
+        // Bottom (Y-)
+        {{-0.5f,-0.5f, 0.5f}, {0,-1,0}, {0,0}, {}},
+        {{ 0.5f,-0.5f, 0.5f}, {0,-1,0}, {1,0}, {}},
+        {{ 0.5f,-0.5f,-0.5f}, {0,-1,0}, {1,1}, {}},
+        {{-0.5f,-0.5f,-0.5f}, {0,-1,0}, {0,1}, {}},
+    };
+
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    
-    // Create cube vertices (24 vertices for proper normals)
-    float positions[8][3] = {
-        {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f},
-        {0.5f, 0.5f, -0.5f}, {-0.5f, 0.5f, -0.5f},
-        {-0.5f, -0.5f, 0.5f}, {0.5f, -0.5f, 0.5f},
-        {0.5f, 0.5f, 0.5f}, {-0.5f, 0.5f, 0.5f}
-    };
-    
-    // Face definitions
-    int faces[6][4] = {
-        {0, 1, 2, 3}, // Front
-        {5, 4, 7, 6}, // Back
-        {4, 0, 3, 7}, // Left
-        {1, 5, 6, 2}, // Right
-        {3, 2, 6, 7}, // Top
-        {4, 5, 1, 0}  // Bottom
-    };
-    
-    glm::vec3 normals[6] = {
-        {0, 0, -1}, {0, 0, 1}, {-1, 0, 0},
-        {1, 0, 0}, {0, 1, 0}, {0, -1, 0}
-    };
-    
-    for (int f = 0; f < 6; f++) {
-        uint32_t baseIndex = vertices.size();
-        
-        for (int v = 0; v < 4; v++) {
-            Vertex vertex;
-            vertex.position = glm::vec3(
-                positions[faces[f][v]][0],
-                positions[faces[f][v]][1],
-                positions[faces[f][v]][2]
-            );
-            vertex.normal = normals[f];
-            vertex.texCoord = glm::vec2((v & 1) ? 1.0f : 0.0f, (v & 2) ? 1.0f : 0.0f);
-            vertex.tangent = glm::vec3(1, 0, 0); // Simplified
-            vertices.push_back(vertex);
+
+    for (int i = 0; i < 24; i += 4) {
+        // Вычисляем тангент для грани
+        glm::vec3 edge1 = cubeVertices[i + 1].position - cubeVertices[i].position;
+        glm::vec3 edge2 = cubeVertices[i + 3].position - cubeVertices[i].position;
+        glm::vec2 deltaUV1 = cubeVertices[i + 1].texCoord - cubeVertices[i].texCoord;
+        glm::vec2 deltaUV2 = cubeVertices[i + 3].texCoord - cubeVertices[i].texCoord;
+
+        float r = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV1.y * deltaUV2.x);
+        glm::vec3 tangent = (edge1 * deltaUV2.y - edge2 * deltaUV1.y) * r;
+        tangent = glm::normalize(tangent);
+
+        for (int v = 0; v < 4; ++v) {
+            cubeVertices[i + v].tangent = tangent;
+            vertices.push_back(cubeVertices[i + v]);
         }
-        
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 1);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 3);
+
+        // Два треугольника на грань
+        indices.push_back(i + 0);
+        indices.push_back(i + 1);
+        indices.push_back(i + 2);
+        indices.push_back(i + 0);
+        indices.push_back(i + 2);
+        indices.push_back(i + 3);
     }
-    
+
     return CreateMesh("cube", vertices, indices);
 }
 

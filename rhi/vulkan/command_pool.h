@@ -24,11 +24,13 @@ public:
     void Reset(VkCommandPoolResetFlags flags = 0);
     
     VkCommandPool GetHandle() const { return m_pool; }
+    uint32_t GetQueueFamilyIndex() const { return m_queueFamilyIndex; }
 
 private:
     Device* m_device;
     VkCommandPool m_pool = VK_NULL_HANDLE;
     mutable std::mutex m_mutex;
+    uint32_t m_queueFamilyIndex{};
 };
 
 // Thread-safe command pool manager
@@ -47,9 +49,17 @@ public:
     VkCommandBuffer BeginSingleTimeCommands();
     void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
 
+    VkCommandBuffer BeginSingleTimeCommandsGraphics();
+    void EndSingleTimeCommandsGraphics(VkCommandBuffer commandBuffer);
+
+    VkCommandBuffer BeginSingleTimeCommandsCompute();
+    void EndSingleTimeCommandsCompute(VkCommandBuffer cmd);
+
 private:
     Device* m_device;
     std::unique_ptr<CommandPool> m_transferPool;
+    std::unique_ptr<CommandPool> m_graphicsPool;
+    std::unique_ptr<CommandPool> m_computePool;
 	
 	static void CleanupThreadPools();
     static std::mutex s_cleanupMutex;

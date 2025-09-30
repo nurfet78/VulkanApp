@@ -11,6 +11,8 @@ namespace RHI::Vulkan {
     class Image;
     class DescriptorAllocator;
     class DescriptorLayoutCache;
+    class ShaderManager;
+    class ReloadablePipeline;
 }
 
 namespace Renderer {
@@ -45,6 +47,9 @@ public:
     };
     
     MaterialTemplate(const std::string& name);
+	MaterialTemplate(const std::string& name,
+		RHI::Vulkan::Device* device,
+		RHI::Vulkan::DescriptorLayoutCache* layoutCache);
     ~MaterialTemplate();
     
     // Define parameters
@@ -53,10 +58,16 @@ public:
     void AddTexture(const std::string& name, uint32_t binding,
                    VkDescriptorType type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                    VkShaderStageFlags stages = VK_SHADER_STAGE_FRAGMENT_BIT);
+
+	void CreateDescriptorLayout();
+	void CreatePipelineLayout(VkDescriptorSetLayout sceneLayout);
     
     // Pipeline management
-    void SetPipeline(RHI::Vulkan::Pipeline* pipeline) { m_pipeline = pipeline; }
-    RHI::Vulkan::Pipeline* GetPipeline() const { return m_pipeline; }
+	void SetPipeline(std::unique_ptr<RHI::Vulkan::ReloadablePipeline> pipeline) {
+		m_pipeline = std::move(pipeline);
+	}
+
+    RHI::Vulkan::ReloadablePipeline* GetPipeline() const { return m_pipeline.get(); }
     
     VkDescriptorSetLayout GetDescriptorLayout() const { return m_descriptorLayout; }
     VkPipelineLayout GetPipelineLayout() const { return m_pipelineLayout; }
@@ -67,8 +78,10 @@ public:
     uint32_t GetUniformBufferSize() const { return m_uniformBufferSize; }
     
 private:
+	RHI::Vulkan::Device* m_device = nullptr;
+	RHI::Vulkan::DescriptorLayoutCache* m_layoutCache = nullptr;
     std::string m_name;
-    RHI::Vulkan::Pipeline* m_pipeline = nullptr;
+    std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_pipeline = nullptr;
     
     std::vector<ParameterInfo> m_parameters;
     std::vector<TextureBinding> m_textureBindings;
@@ -98,7 +111,7 @@ public:
     void UpdateDescriptorSet();
     
     // Bind for rendering
-    void Bind(VkCommandBuffer cmd);
+    void Bind(VkCommandBuffer cmd, VkDescriptorSet sceneDescriptorSet);
 	
 	void SetDescriptorSet(VkDescriptorSet set) { m_descriptorSet = set; }
     
@@ -134,6 +147,12 @@ public:
     // Template management
     MaterialTemplate* CreateTemplate(const std::string& name);
     MaterialTemplate* GetTemplate(const std::string& name);
+
+	void CreatePipelineForTemplate(const std::string& templateName,
+		RHI::Vulkan::ShaderManager* shaderManager,
+		const std::string& shaderProgramName,
+		VkFormat colorFormat,
+		VkFormat depthFormat);
     
     // Material management
     Material* CreateMaterial(const std::string& name, const std::string& templateName);
@@ -149,11 +168,16 @@ public:
     void CreateDefaultMaterials();
     Material* GetDefaultMaterial() { return GetMaterial("default"); }
     Material* GetErrorMaterial() { return GetMaterial("error"); }
+
+    VkDescriptorSetLayout GetSceneDescriptorLayout() const { return m_sceneDescriptorLayout; }
     
 private:
     void CreateStandardTemplates();
+    void CreateSceneDescriptorLayout();
     
     RHI::Vulkan::Device* m_device;
+
+    VkDescriptorSetLayout m_sceneDescriptorLayout = VK_NULL_HANDLE;
     
     std::unique_ptr<RHI::Vulkan::DescriptorAllocator> m_descriptorAllocator;
     std::unique_ptr<RHI::Vulkan::DescriptorLayoutCache> m_layoutCache;

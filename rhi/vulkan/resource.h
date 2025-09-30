@@ -3,6 +3,10 @@
 
 #include "vulkan_common.h"
 
+namespace Core {
+    class CoreContext;
+}
+
 namespace RHI::Vulkan {
 
 class Device;
@@ -12,12 +16,13 @@ class StagingBufferPool;  // Добавлено
 // Buffer wrapper
 class Buffer {
 public:
-    Buffer(Device* device, VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+    Buffer(Device* device, VkDeviceSize size, VkBufferUsageFlags2 usage, VmaMemoryUsage memoryUsage);
     ~Buffer();
     
     void* Map();
     void Unmap();
     void Upload(const void* data, VkDeviceSize size, VkDeviceSize offset = 0);
+    void Update(const void* data, VkDeviceSize size, VkDeviceSize offset = 0);
     
 	// Изменено: Теперь принимает командный буфер извне
     void CopyFrom(VkCommandBuffer cmd, Buffer* srcBuffer, VkDeviceSize size, 
@@ -30,6 +35,7 @@ public:
     VkBuffer GetHandle() const { return m_buffer; }
     VkDeviceSize GetSize() const { return m_size; }
     VkDeviceAddress GetDeviceAddress() const;
+    VkBuffer GetBuffer() const { return m_buffer; }
     
 private:
     Device* m_device;
@@ -39,14 +45,38 @@ private:
     void* m_mappedData = nullptr;
 };
 
+
 // Image wrapper
 class Image {
 public:
-    Image(Device* device, uint32_t width, uint32_t height, VkFormat format,
-          VkImageUsageFlags usage, VkImageAspectFlags aspectFlags);
+    Image(Device* device,
+        uint32_t width,
+        uint32_t height,
+        uint32_t depth,
+        uint32_t arrayLayers,
+        VkFormat format,
+        VkImageUsageFlags usage,
+        VkImageType imageType = VK_IMAGE_TYPE_2D,
+        VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL,
+        VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
+        VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+        VmaMemoryUsage memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+        VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        uint32_t queueFamilyIndexCount = 0,
+        const uint32_t* pQueueFamilyIndices = nullptr,
+        VkImageCreateFlags flags = 0);
+
+    Image(Device* device,
+        uint32_t width,
+        uint32_t height,
+        VkFormat format,
+        VkImageUsageFlags usage,
+        VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
+
     ~Image();
     
-    void TransitionLayout(VkCommandBuffer cmd, VkImageLayout oldLayout, VkImageLayout newLayout);
+    void TransitionLayout(VkImageLayout oldLayout, VkImageLayout newLayout, Core::CoreContext* context);
     void CopyFromBuffer(VkCommandBuffer cmd, Buffer* buffer);
     void GenerateMipmaps(VkCommandBuffer cmd);
     
@@ -56,6 +86,13 @@ public:
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
     uint32_t GetMipLevels() const { return m_mipLevels; }
+    uint32_t GetDepth() const { return m_depth; }
+    uint32_t GetArrayLayers() const { return m_arrayLayers; }
+    VkImageLayout GetCurrentLayout() const { return m_currentLayout; }
+
+    void SetCurrentLayout(VkImageLayout newLayout) {
+        m_currentLayout = newLayout;
+    }
     
 private:
     Device* m_device;
@@ -66,7 +103,20 @@ private:
     uint32_t m_width;
     uint32_t m_height;
     uint32_t m_mipLevels;
+    uint32_t m_arrayLayers;
     VkFormat m_format;
+    uint32_t m_depth;
+    VkImageLayout m_currentLayout;
+
+    void TransitionLayout(
+        VkCommandBuffer cmd,
+        VkImageLayout oldLayout,
+        VkImageLayout newLayout,
+        uint32_t baseMipLevel,
+        uint32_t levelCount,
+        uint32_t baseArrayLayer,
+        uint32_t layerCount
+    );
 };
 
 // Sampler wrapper
@@ -90,43 +140,18 @@ struct Vertex {
     glm::vec3 normal;
     glm::vec2 texCoord;
     glm::vec3 tangent;
-    
-    static VkVertexInputBindingDescription GetBindingDescription() {
-        VkVertexInputBindingDescription bindingDescription{};
-        bindingDescription.binding = 0;
-        bindingDescription.stride = sizeof(Vertex);
-        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-        return bindingDescription;
+
+    static std::vector<VkVertexInputBindingDescription> GetVertexBindings() {
+        return { {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX} };
     }
-    
-    static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions() {
-        std::vector<VkVertexInputAttributeDescription> attributeDescriptions(4);
-        
-        // Position
-        attributeDescriptions[0].binding = 0;
-        attributeDescriptions[0].location = 0;
-        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[0].offset = offsetof(Vertex, position);
-        
-        // Normal
-        attributeDescriptions[1].binding = 0;
-        attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = offsetof(Vertex, normal);
-        
-        // TexCoord
-        attributeDescriptions[2].binding = 0;
-        attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-        
-        // Tangent
-        attributeDescriptions[3].binding = 0;
-        attributeDescriptions[3].location = 3;
-        attributeDescriptions[3].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[3].offset = offsetof(Vertex, tangent);
-        
-        return attributeDescriptions;
+
+    static std::vector<VkVertexInputAttributeDescription> GetVertexAttributes() {
+        return {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
+            {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
+            {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, tangent)}
+        };
     }
 };
 

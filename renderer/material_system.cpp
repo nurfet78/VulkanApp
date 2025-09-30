@@ -2,6 +2,7 @@
 #include "material_system.h"
 #include "rhi/vulkan/resource.h"
 #include "rhi/vulkan/descriptor_allocator.h"
+#include "rhi/vulkan/shader_manager.h"
 
 namespace Renderer {
 
@@ -9,8 +10,19 @@ namespace Renderer {
 MaterialTemplate::MaterialTemplate(const std::string& name) : m_name(name) {
 }
 
+MaterialTemplate::MaterialTemplate(const std::string& name,
+	RHI::Vulkan::Device* device,
+	RHI::Vulkan::DescriptorLayoutCache* layoutCache)
+	: m_name(name), m_device(device), m_layoutCache(layoutCache) {
+}
+
 MaterialTemplate::~MaterialTemplate() {
-    // Cleanup handled by device
+	if (m_pipelineLayout != VK_NULL_HANDLE) {
+		vkDestroyPipelineLayout(m_device->GetDevice(), m_pipelineLayout, nullptr);
+	}
+	if (m_descriptorLayout != VK_NULL_HANDLE) {
+		vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_descriptorLayout, nullptr);
+	}
 }
 
 void MaterialTemplate::AddParameter(const std::string& name, VkShaderStageFlags stages,
@@ -37,6 +49,67 @@ void MaterialTemplate::AddTexture(const std::string& name, uint32_t binding,
     m_textureBindings.push_back(texture);
 }
 
+void MaterialTemplate::CreateDescriptorLayout() {
+	if (m_descriptorLayout != VK_NULL_HANDLE) return;
+
+	std::vector<VkDescriptorSetLayoutBinding> bindings;
+
+	// Uniform buffer для параметров материала (binding 0)
+	if (m_uniformBufferSize > 0) {
+		VkDescriptorSetLayoutBinding uboBinding{};
+		uboBinding.binding = 0;
+		uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		uboBinding.descriptorCount = 1;
+		uboBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		bindings.push_back(uboBinding);
+	}
+
+	// Текстуры
+	for (const auto& tex : m_textureBindings) {
+		VkDescriptorSetLayoutBinding texBinding{};
+		texBinding.binding = tex.binding;
+		texBinding.descriptorType = tex.type;
+		texBinding.descriptorCount = 1;
+		texBinding.stageFlags = tex.stages;
+		bindings.push_back(texBinding);
+	}
+
+	VkDescriptorSetLayoutCreateInfo layoutInfo{};
+	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+	layoutInfo.pBindings = bindings.data();
+
+	if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr,
+		&m_descriptorLayout) != VK_SUCCESS) {
+		throw std::runtime_error("Failed to create material descriptor layout");
+	}
+}
+
+void MaterialTemplate::CreatePipelineLayout(VkDescriptorSetLayout sceneLayout) {
+	if (m_pipelineLayout != VK_NULL_HANDLE) return;
+
+	// set=0: scene data, set=1: material data
+	std::array<VkDescriptorSetLayout, 2> layouts = { sceneLayout, m_descriptorLayout };
+
+	// Push constants для MVP
+	VkPushConstantRange pushRange{};
+	pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	pushRange.offset = 0;
+	pushRange.size = sizeof(glm::mat4) * 2; // mvp + normalMatrix
+
+	VkPipelineLayoutCreateInfo layoutInfo{};
+	layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	layoutInfo.setLayoutCount = 2;
+	layoutInfo.pSetLayouts = layouts.data();
+	layoutInfo.pushConstantRangeCount = 1;
+	layoutInfo.pPushConstantRanges = &pushRange;
+
+	if (vkCreatePipelineLayout(m_device->GetDevice(), &layoutInfo, nullptr,
+		&m_pipelineLayout) != VK_SUCCESS) {
+		throw std::runtime_error("Failed to create material pipeline layout");
+	}
+}
+
 // Material implementation
 Material::Material(MaterialTemplate* template_, RHI::Vulkan::Device* device)
     : m_template(template_), m_device(device) {
@@ -46,7 +119,7 @@ Material::Material(MaterialTemplate* template_, RHI::Vulkan::Device* device)
         m_uniformBuffer = std::make_unique<RHI::Vulkan::Buffer>(
             device,
             m_template->GetUniformBufferSize(),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_BUFFER_USAGE_2_UNIFORM_BUFFER_BIT,
             VMA_MEMORY_USAGE_CPU_TO_GPU
         );
     }
@@ -172,18 +245,23 @@ void Material::UpdateDescriptorSet() {
     }
 }
 
-void Material::Bind(VkCommandBuffer cmd) {
-    if (m_dirty) {
-        UpdateUniformBuffer();
-        UpdateDescriptorSet();
-        m_dirty = false;
-    }
-    
-    if (m_descriptorSet) {
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              m_template->GetPipelineLayout(),
-                              0, 1, &m_descriptorSet, 0, nullptr);
-    }
+void Material::Bind(VkCommandBuffer cmd, VkDescriptorSet sceneDescriptorSet) {
+	if (m_dirty) {
+		UpdateUniformBuffer();
+		UpdateDescriptorSet();
+		m_dirty = false;
+	}
+
+	if (m_descriptorSet && sceneDescriptorSet) {
+		std::array<VkDescriptorSet, 2> descriptorSets = {
+			sceneDescriptorSet,    // set=0
+			m_descriptorSet        // set=1
+		};
+
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			m_template->GetPipelineLayout(),
+			0, 2, descriptorSets.data(), 0, nullptr);
+	}
 }
 
 // MaterialSystem implementation
@@ -191,25 +269,95 @@ MaterialSystem::MaterialSystem(RHI::Vulkan::Device* device) : m_device(device) {
     m_descriptorAllocator = std::make_unique<RHI::Vulkan::DescriptorAllocator>(device);
     m_layoutCache = std::make_unique<RHI::Vulkan::DescriptorLayoutCache>(device);
     
+    CreateSceneDescriptorLayout();
     CreateStandardTemplates();
-    CreateDefaultMaterials();
+    //CreateDefaultMaterials();
 }
 
 MaterialSystem::~MaterialSystem() {
     m_materials.clear();
     m_templates.clear();
+
+	if (m_sceneDescriptorLayout != VK_NULL_HANDLE) {
+		vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_sceneDescriptorLayout, nullptr);
+	}
+}
+
+void MaterialSystem::CreateSceneDescriptorLayout() {
+	VkDescriptorSetLayoutBinding uboBinding{};
+	uboBinding.binding = 0;
+	uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	uboBinding.descriptorCount = 1;
+	uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	VkDescriptorSetLayoutCreateInfo layoutInfo{};
+	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.bindingCount = 1;
+	layoutInfo.pBindings = &uboBinding;
+
+	if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr,
+		&m_sceneDescriptorLayout) != VK_SUCCESS) {
+		throw std::runtime_error("Failed to create scene descriptor layout");
+	}
 }
 
 MaterialTemplate* MaterialSystem::CreateTemplate(const std::string& name) {
-    auto template_ = std::make_unique<MaterialTemplate>(name);
-    MaterialTemplate* ptr = template_.get();
-    m_templates[name] = std::move(template_);
-    return ptr;
+	auto template_ = std::make_unique<MaterialTemplate>(name, m_device, m_layoutCache.get());
+	MaterialTemplate* ptr = template_.get();
+	m_templates[name] = std::move(template_);
+	return ptr;
 }
 
 MaterialTemplate* MaterialSystem::GetTemplate(const std::string& name) {
     auto it = m_templates.find(name);
     return it != m_templates.end() ? it->second.get() : nullptr;
+}
+
+void MaterialSystem::CreatePipelineForTemplate(const std::string& templateName,
+	RHI::Vulkan::ShaderManager* shaderManager,
+	const std::string& shaderProgramName,
+	VkFormat colorFormat,
+	VkFormat depthFormat) {
+	auto* template_ = GetTemplate(templateName);
+	if (!template_) {
+		throw std::runtime_error("Template not found: " + templateName);
+	}
+
+	// Создать descriptor layout для материала
+	template_->CreateDescriptorLayout();
+
+	// Создать pipeline layout с scene и material layouts
+	template_->CreatePipelineLayout(m_sceneDescriptorLayout);
+
+	// Создать pipeline через ReloadablePipeline
+	auto bindingDescs = RHI::Vulkan::Vertex::GetVertexBindings();
+	auto attributeDescs = RHI::Vulkan::Vertex::GetVertexAttributes();
+
+	VkPushConstantRange pushRange{};
+	pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	pushRange.offset = 0;
+	pushRange.size = sizeof(glm::mat4) * 2;
+
+
+	auto info = RHI::Vulkan::ReloadablePipeline::Make3DPipelineInfo(
+		shaderProgramName,
+		colorFormat,
+		depthFormat,
+		nullptr,
+		2, // 2 descriptor sets
+		bindingDescs,
+		attributeDescs,
+		{ pushRange }
+	);
+
+    info.externalLayout = template_->GetPipelineLayout();
+
+	auto pipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, shaderManager);
+	if (!pipeline->Create(info)) {
+		throw std::runtime_error("Failed to create pipeline for template: " + templateName);
+	}
+
+	template_->SetPipeline(std::move(pipeline));
 }
 
 Material* MaterialSystem::CreateMaterial(const std::string& name, const std::string& templateName) {
@@ -293,6 +441,15 @@ void MaterialSystem::CreateDefaultMaterials() {
         defaultMat->SetParameter("ao", 1.0f);
         defaultMat->SetParameter("emissive", 0.0f);
     }
+
+	auto metalMat = CreateMaterial("metal", "pbr");
+	if (metalMat) {
+		metalMat->SetParameter("baseColor", glm::vec4(1.0f, 0.95f, 0.5f, 1.0f));
+		metalMat->SetParameter("metallic", 1.0f);
+		metalMat->SetParameter("roughness", 0.2f);
+		metalMat->SetParameter("ao", 1.0f);
+		metalMat->SetParameter("emissive", 0.0f);
+	}
     
     // Error material (bright magenta)
     auto errorMat = CreateMaterial("error", "unlit");
@@ -329,6 +486,33 @@ void MaterialSystem::CreateDefaultMaterials() {
         roofMat->SetParameter("ao", 1.0f);
         roofMat->SetParameter("emissive", 0.0f);
     }
+
+	auto shinyPlasticMat = CreateMaterial("shiny_plastic", "pbr");
+	if (shinyPlasticMat) {
+		shinyPlasticMat->SetParameter("baseColor", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		shinyPlasticMat->SetParameter("metallic", 0.0f);
+		shinyPlasticMat->SetParameter("roughness", 0.2f);
+		shinyPlasticMat->SetParameter("ao", 1.0f);
+		shinyPlasticMat->SetParameter("emissive", 0.0f);
+	}
+
+	auto mattePlasticMat = CreateMaterial("matte_plastic", "pbr");
+	if (mattePlasticMat) {
+		mattePlasticMat->SetParameter("baseColor", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		mattePlasticMat->SetParameter("metallic", 0.0f);
+		mattePlasticMat->SetParameter("roughness", 0.85f);
+		mattePlasticMat->SetParameter("ao", 1.0f);
+		mattePlasticMat->SetParameter("emissive", 0.0f);
+	}
+
+	auto chromeMat = CreateMaterial("chrome", "pbr");
+	if (chromeMat) {
+		chromeMat->SetParameter("baseColor", glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
+		chromeMat->SetParameter("metallic", 1.0f);
+		chromeMat->SetParameter("roughness", 0.02f);
+		chromeMat->SetParameter("ao", 1.0f);
+		chromeMat->SetParameter("emissive", 0.0f);
+	}
 }
 
 } // namespace Renderer

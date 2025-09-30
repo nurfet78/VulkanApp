@@ -38,9 +38,7 @@ public:
     VkDevice GetDevice() const { return m_device; }
     VkSurfaceKHR GetSurface() const { return m_surface; }
     VmaAllocator GetAllocator() const { return m_allocator; }
-
-    RHI::Vulkan::DescriptorAllocator* GetDescriptorAllocator() { return &m_descriptorAllocator; }
-    RHI::Vulkan::DescriptorLayoutCache* GetDescriptorLayoutCache() { return &m_descriptorLayoutCache; }
+    VkSampleCountFlagBits GetMaxUsableSampleCount() const;
     
     // Thread-safe queue access with submit mutex
     VkQueue GetGraphicsQueue() const { return m_graphicsQueue; }
@@ -138,8 +136,6 @@ private:
     
     VmaAllocator m_allocator = VK_NULL_HANDLE;
     
-    DescriptorAllocator m_descriptorAllocator{ this };
-    DescriptorLayoutCache m_descriptorLayoutCache{ this };
 
     bool m_validationEnabled = false;
     
@@ -149,6 +145,7 @@ private:
         VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
         VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
         VK_KHR_MAINTENANCE_4_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME

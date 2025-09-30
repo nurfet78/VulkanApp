@@ -1,4 +1,4 @@
-// meadow_app.cpp - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// meadow_app.cpp 
 
 #include "rhi/vulkan/staging_buffer_pool.h"
 #include "meadow_app.h"
@@ -12,14 +12,17 @@
 #include "rhi/vulkan/resource.h"
 #include "rhi/vulkan/shader_manager.h"
 #include "renderer/triangle_renderer.h"
-#include "renderer/sky_renderer.h"
+#include "core/core_context.h"
+#include "renderer/CubeRenderer.h"
+#include "renderer/material_system.h"
+#include "scene/components.h"
 
 
 MeadowApp::MeadowApp() 
     : Core::Application({
         .title = "Meadow World - Vulkan 1.4",
-        .width = 920,
-        .height = 780,
+        .width = 1400,
+        .height = 950,
         .vsync = true,
         .fullscreen = false,
         .workerThreads = std::thread::hardware_concurrency() - 1
@@ -39,6 +42,8 @@ void MeadowApp::OnInitialize() {
 
     // 1. Initialize Vulkan Device first (это создает instance, surface, physical device, logical device)
     m_device = std::make_unique<RHI::Vulkan::Device>(GetWindow(), true);
+
+    m_coreContext = std::make_unique<Core::CoreContext>(m_device.get());
 
     // Теперь Device полностью инициализирован и знает семейства очередей
 
@@ -67,22 +72,32 @@ void MeadowApp::OnInitialize() {
         m_commandPoolManager->GetTransferPool()
     );
 
+    m_materialSystem = std::make_unique<Renderer::MaterialSystem>(m_device.get());
+
     // 5. Create triangle pipeline (требует Device и format от swapchain)
-    m_trianglePipeline = std::make_unique<RHI::Vulkan::TriangleRenderer>(
+    m_trianglePipeline = std::make_unique<Renderer::TriangleRenderer>(
         m_device.get(),
         m_shaderManager.get(),
         m_swapchain->GetFormat()
-    );
+    ); 
 
-    // Создаем рендер неба
-    m_skyRenderer = std::make_unique<Renderer::SkyRenderer>(
+	m_cameraRotationX = 0.3f;  // ~17 градусов вверх
+	m_cameraRotationY = 0.5f;  // ~29 градусов вбок
+
+    // 8. Initialize scene
+    InitializeScene();
+
+    // 9. Create depth buffer
+    CreateDepthBuffer();
+
+    m_cubeRenderer = std::make_unique<Renderer::CubeRenderer>(
         m_device.get(),
         m_shaderManager.get(),
+        m_materialSystem.get(),
+        m_resourceManager.get(),
         m_swapchain->GetFormat(),
-        m_swapchain->GetDepthFormat() 
+        VK_FORMAT_D32_SFLOAT
     );
-
-    m_skyRenderer->ConfigureSky();
 
     // 6. Create sync objects and command buffers for each frame
     CreateSyncObjects();
@@ -113,48 +128,81 @@ void MeadowApp::OnInitialize() {
 
 void MeadowApp::Update() {
     // Вычисляем delta time
-    float currentTime = glfwGetTime(); // или другой источник времени
+    float currentTime = glfwGetTime();
     m_deltaTime = currentTime - m_lastFrameTime;
     m_lastFrameTime = currentTime;
 
-    // Обновляем небо (для анимации облаков и времени дня)
-    m_skyRenderer->Update(m_deltaTime);
+    if (m_deltaTime > 0.05f) {
+        m_deltaTime = 0.05f; // clamp
+    }
 
-    // Обработка ввода для камеры
+    HandleSkyControls();
     UpdateCamera();
 
-    // Управление временем дня с клавиатуры (опционально)
-    if (glfwGetKey(m_window, GLFW_KEY_T) == GLFW_PRESS) {
-        float time = m_skyRenderer->GetTimeOfDay();
-        time += m_deltaTime * 2.0f; // 2 часа в секунду
-        if (time >= 24.0f) time -= 24.0f;
-        m_skyRenderer->SetTimeOfDay(time);
-    }
+    // Update cube rotation with time
+    static float rotation = 0.0f;
+    rotation += m_deltaTime * glm::radians(45.0f); // 45 degrees per second
+    m_cubeTransform->SetRotationEuler(glm::vec3(rotation * 0.5f, rotation, rotation * 0.3f));
+    // Update camera transform
+    Scene::Transform cameraTransform;
+    cameraTransform.SetPosition(m_cameraPos);
+    cameraTransform.LookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    m_camera->UpdateViewMatrix(cameraTransform);
+
+    std::vector<Renderer::LightData> lights;
+
+    CollectLightData(currentTime);
 }
 
-void MeadowApp::UpdateCamera() {
-    // Вращение камеры мышью
-    if (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-        double xpos, ypos;
-        glfwGetCursorPos(m_window, &xpos, &ypos);
+// Сбор данных для передачи в шейдер:
+void MeadowApp::CollectLightData(float time) {
 
-        static double lastX = xpos, lastY = ypos;
-        double deltaX = xpos - lastX;
-        double deltaY = ypos - lastY;
+    // Анимация точечного света (вращение вокруг куба)
+    float radius = 3.0f;
+    glm::vec3 lightPos = glm::vec3(
+        cos(time * 0.5f) * radius,
+        1.5f + sin(time * 0.3f) * 0.5f,  // Плавание вверх-вниз
+        sin(time * 0.5f) * radius
+    );
+    //m_pointLightTransform->SetPosition(lightPos);
 
-        m_cameraRotationY += deltaX * 0.01f;
-        m_cameraRotationX += deltaY * 0.01f;
-        m_cameraRotationX = glm::clamp(m_cameraRotationX, -1.5f, 1.5f);
+    std::vector<Renderer::LightData> lights;
 
-        lastX = xpos;
-        lastY = ypos;
-    }
+    // Sun light
+    Renderer::LightData sun;
+    sun.direction = m_sunLight->GetDirection();
+    sun.color = m_sunLight->GetColor();
+    sun.intensity = m_sunLight->GetIntensity();
+    sun.type = 0; // Directional
+    //sun.shadingModel = static_cast<int>(m_sunLight->GetShadingModel());
+    //sun.wrapFactor = m_sunLight->GetWrapFactor();
+    //sun.toonSteps = m_sunLight->GetToonSteps();
+    //sun.softness = m_sunLight->GetSoftness();
+    lights.push_back(sun);
 
-    // Обновляем позицию камеры на основе вращения
-    float distance = 5.0f;
-    m_cameraPos.x = distance * sin(m_cameraRotationY) * cos(m_cameraRotationX);
-    m_cameraPos.y = distance * sin(m_cameraRotationX);
-    m_cameraPos.z = distance * cos(m_cameraRotationY) * cos(m_cameraRotationX);
+    // Point light
+    Renderer::LightData point;
+    point.position = m_pointLightTransform->GetPosition();
+    point.color = m_pointLight->GetColor();
+    point.intensity = m_pointLight->GetIntensity();
+    point.range = m_pointLight->GetRange();
+    point.type = 1; // Point
+    //point.shadingModel = static_cast<int>(m_pointLight->GetShadingModel());
+    //point.wrapFactor = m_pointLight->GetWrapFactor();
+    //point.toonSteps = m_pointLight->GetToonSteps();
+    //point.softness = m_pointLight->GetSoftness();
+    lights.push_back(point);
+
+    // Передать в рендерер
+    m_cubeRenderer->UpdateUniforms(
+        m_camera->GetViewMatrix(),
+        m_camera->GetProjectionMatrix(),
+        m_cameraPos,
+        time,  // pass time for shader animation
+        lights,
+        glm::vec3(0.2f, 0.2f, 0.2f) // ambient
+    );
 }
 
 void MeadowApp::LoadShaders() {
@@ -168,54 +216,52 @@ void MeadowApp::LoadShaders() {
         throw std::runtime_error("Failed to compile Triangle shader program!");
     }
 
-    // Шейдерная программа для скайбокса (если есть)
-     auto* skyProgram = m_shaderManager->CreateProgram("Sky");
-     skyProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/sky.vert.spv");
-     skyProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/sky.frag.spv");
-     if (!skyProgram->Compile()) {
-         throw std::runtime_error("Failed to compile Sky shader program!");
-     }
-
-    // ... Добавьте здесь все остальные шейдерные программы вашего приложения
+    // Cube shader 
+    auto* cubeProgram = m_shaderManager->CreateProgram("Cube");
+    cubeProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/cube.vert.spv");
+    cubeProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/cube.frag.spv");
+    if (!cubeProgram->Compile()) {
+        throw std::runtime_error("Failed to compile Cube shader program!");
+    }
 }
 
 void MeadowApp::OnShutdown() {
     std::cout << "Shutting down..." << std::endl;
 
-    // Проверяем, что m_device вообще существует, прежде чем его использовать
     if (!m_device) {
         return;
     }
 
-    // Ждем, пока GPU закончит все свои дела.
-    // vkDeviceWaitIdle делает то же самое, что и ожидание всех fence'ов, и даже больше.
-    // Поэтому можно оставить только его, это надежнее.
     vkDeviceWaitIdle(m_device->GetDevice());
-
-    // Теперь безопасно уничтожать объекты в порядке, ОБРАТНОМ их созданию.
 
     // 1. Уничтожаем объекты синхронизации
     DestroySyncObjects();
 
     // 2. Уничтожаем высокоуровневые объекты рендера
-    //if (m_skyRenderer) m_skyRenderer.reset(); // Не забудьте, если добавили
-    if (m_skyRenderer) m_skyRenderer.reset();
+    if (m_cubeRenderer) m_cubeRenderer.reset();
     if (m_trianglePipeline) m_trianglePipeline.reset();
 
-    // 3. Уничтожаем менеджеры
+    // 3. Уничтожаем сцену
+    if (m_cubeTransform) m_cubeTransform.reset();
+    if (m_camera) m_camera.reset();
+
+    // 4. Уничтожаем буферы
+    if (m_depthBuffer) m_depthBuffer.reset();
+
+    // 5. Уничтожаем менеджеры
+    if (m_materialSystem) m_materialSystem.reset();
     if (m_resourceManager) m_resourceManager.reset();
 
-    // === КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ===
-    // 4. Уничтожаем ShaderManager ПЕРЕД уничтожением устройства.
-    //    Это вызовет деструкторы всех ShaderProgram и уничтожит все VkShaderModule.
+    // 6. ShaderManager перед устройством
     if (m_shaderManager) m_shaderManager.reset();
-    // =============================
 
-    // 5. Уничтожаем "системные" объекты Vulkan
+    if (m_coreContext) m_coreContext.reset();
+
+    // 7. Системные объекты Vulkan
     if (m_commandPoolManager) m_commandPoolManager.reset();
     if (m_swapchain) m_swapchain.reset();
 
-    // 6. В САМОМ КОНЦЕ уничтожаем логическое устройство
+    // 8. В самом конце уничтожаем логическое устройство
     if (m_device) m_device.reset();
 
     std::cout << "Shutdown complete." << std::endl;
@@ -322,36 +368,38 @@ void MeadowApp::RecreateSwapchain() {
     // Сюда входят все пайплайны и рендеры, так как они создавались
     // с использованием форматов и размеров старого swapchain'а.
 
-    m_skyRenderer.reset();
+    // Destroy old depth buffer
+    m_depthBuffer.reset();
+
+    // Destroy renderers
+    m_cubeRenderer.reset();
     m_trianglePipeline.reset();
 
-    // Также сюда могут входить фреймбуферы, если вы их используете.
-
-    // 4. ПЕРЕСОЗДАЕМ БАЗОВЫЕ РЕСУРСЫ.
-    // Эта функция уничтожит старый swapchain, его image views, старый depth buffer
-    // и создаст новые с актуальными размерами.
+    // Recreate swapchain
     m_swapchain->Recreate(width, height);
 
+    // Update camera aspect ratio
+    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+    m_camera->SetAspectRatio(aspectRatio);
 
-    // 5. ПЕРЕСОЗДАЕМ ЗАВИСИМЫЕ ОБЪЕКТЫ.
-    // Теперь, когда у нас есть новый swapchain, мы можем заново создать
-    // рендеры. Они автоматически подхватят новые форматы и размеры.
-    m_trianglePipeline = std::make_unique<RHI::Vulkan::TriangleRenderer>(
+    // Recreate depth buffer
+    CreateDepthBuffer();
+
+    // Recreate renderers
+    m_cubeRenderer = std::make_unique<Renderer::CubeRenderer>(
+        m_device.get(),
+        m_shaderManager.get(),
+        m_materialSystem.get(),
+        m_resourceManager.get(),
+        m_swapchain->GetFormat(),
+        VK_FORMAT_D32_SFLOAT
+    );
+
+    m_trianglePipeline = std::make_unique<Renderer::TriangleRenderer>(
         m_device.get(),
         m_shaderManager.get(),
         m_swapchain->GetFormat()
     );
-
-    m_skyRenderer = std::make_unique<Renderer::SkyRenderer>(
-        m_device.get(),
-        m_shaderManager.get(),
-        m_swapchain->GetFormat(),
-        m_swapchain->GetDepthFormat()
-    );
-
-    if (m_skyRenderer) {
-        m_skyRenderer->RecreateSwapchainResources();
-    }
 
     // 6. СБРАСЫВАЕМ ФЛАГ.
     m_framebufferResized = false;
@@ -361,7 +409,7 @@ void MeadowApp::RecreateSwapchain() {
     // не зависят от swapchain'а напрямую и должны жить в течение всего
     // времени работы приложения. Их количество определяется MAX_FRAMES_IN_FLIGHT,
     // а не количеством картинок в swapchain.
-    // Если вам все же нужно пересоздавать командные буферы, это нужно делать
+    // Если нужно пересоздавать командные буферы, это нужно делать
     // отдельно, но уничтожать семафоры и фенсы здесь не следует.
 }
 
@@ -369,10 +417,10 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = 0;
-    
+
     VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
-    
-    // Transition swapchain image to color attachment
+
+    // Только transition swapchain image для color attachment
     VkImageMemoryBarrier2 imageBarrier{};
     imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -387,66 +435,29 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     imageBarrier.subresourceRange.levelCount = 1;
     imageBarrier.subresourceRange.baseArrayLayer = 0;
     imageBarrier.subresourceRange.layerCount = 1;
-    
+
     VkDependencyInfo depInfo{};
     depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     depInfo.imageMemoryBarrierCount = 1;
     depInfo.pImageMemoryBarriers = &imageBarrier;
-    
+
     vkCmdPipelineBarrier2(cmd, &depInfo);
 
-    // ============================================
-        // 1. Рендерим небо (первым!)
-        // ============================================
+    // depth barrier не нужен - dynamic rendering сам переводит depth buffer в нужный layout!
 
-    m_device->BeginDebugLabel(cmd, "Sky Pass", { 0.3f, 0.6f, 1.0f, 1.0f });
+    m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
 
-    // Вычисляем матрицы
-    float aspectRatio = static_cast<float>(m_swapchain->GetExtent().width) /
-        static_cast<float>(m_swapchain->GetExtent().height);
-
-    glm::mat4 projection = glm::perspective(
-        glm::radians(60.0f),  // FOV
-        aspectRatio,
-        0.1f,                 // Near plane
-        1000.0f              // Far plane
-    );
-    projection[1][1] *= -1;  // Flip Y для Vulkan
-
-    glm::mat4 view = glm::lookAt(
-        m_cameraPos,
-        m_cameraTarget,
-        glm::vec3(0.0f, 1.0f, 0.0f)
-    );
-
-    // Для неба нужна только матрица вращения (без перемещения)
-    glm::mat4 viewRotationOnly = glm::mat4(glm::mat3(view));
-
-    // Рендерим небо
-    m_skyRenderer->Render(
+    // Render cube - dynamic rendering автоматически управляет layout'ами
+    m_cubeRenderer->Render(
         cmd,
         m_swapchain->GetFrame(imageIndex).imageView,
-        m_swapchain->GetDepthImageView(),
+        m_depthBuffer->GetView(),
         m_swapchain->GetExtent(),
-        projection,
-        viewRotationOnly,
-        m_cameraPos
+        m_cubeTransform->GetMatrix()
     );
 
     m_device->EndDebugLabel(cmd);
-    
-    // Debug marker
-    m_device->BeginDebugLabel(cmd, "Triangle Pass", {1.0f, 0.0f, 0.0f, 1.0f});
-    
-    // Render triangle
-    m_trianglePipeline->Render(
-        cmd,
-        m_swapchain->GetFrame(imageIndex).imageView,
-        m_swapchain->GetExtent()
-    );
-    
-    m_device->EndDebugLabel(cmd);
-    
+
     // Transition to present
     imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     imageBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -454,10 +465,77 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     imageBarrier.dstAccessMask = 0;
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     imageBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    
-    vkCmdPipelineBarrier2(cmd, &depInfo);
-    
+
+    VkDependencyInfo presentDep{};
+    presentDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    presentDep.imageMemoryBarrierCount = 1;
+    presentDep.pImageMemoryBarriers = &imageBarrier;
+
+    vkCmdPipelineBarrier2(cmd, &presentDep);
+
     VK_CHECK(vkEndCommandBuffer(cmd));
+}
+
+void MeadowApp::CreateDepthBuffer() {
+    VkExtent2D extent = m_swapchain->GetExtent();
+
+    m_depthBuffer = std::make_unique<RHI::Vulkan::Image>(
+        m_device.get(),
+        extent.width,
+        extent.height,
+        VK_FORMAT_D32_SFLOAT,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        VK_IMAGE_ASPECT_DEPTH_BIT
+    );
+
+    // НЕ НУЖНО делать transition - dynamic rendering сделает это автоматически
+    // при первом использовании в vkCmdBeginRendering()
+
+    // Если все же нужно сделать transition (например, для очистки при создании):
+    m_depthBuffer->TransitionLayout(
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        m_coreContext.get()
+    );
+}
+
+void MeadowApp::InitializeScene() {
+    // Create camera
+    m_camera = std::make_unique<Scene::Camera>();
+    float aspectRatio = static_cast<float>(GetWindow()->GetWidth()) / static_cast<float>(GetWindow()->GetHeight());
+    m_camera->SetPerspective(60.0f, aspectRatio, 0.1f, 1000.0f);
+
+    // Create cube transform
+    m_cubeTransform = std::make_unique<Scene::Transform>();
+    m_cubeTransform->SetPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    m_cubeTransform->SetScale(2.0f);
+
+    // Создать направленный свет
+	m_sunLight = std::make_unique<Scene::Light>(Scene::Light::Type::Directional);
+	m_sunLight->SetColor(glm::vec3(1.0f, 0.95f, 0.8f));
+	m_sunLight->SetIntensity(4.0f); 
+	m_sunLight->SetDirection(glm::vec3(-0.5f, -1.0f, -0.2f));
+
+    //// === НАСТРОЙКА Half-Lambert ===
+    //m_sunLight->SetShadingModel(Scene::Light::ShadingModel::HalfLambert);
+    //m_sunLight->SetWrapFactor(0.5f);  // Стандартный Half-Lambert
+    //m_sunLight->SetSoftness(1.0f);
+
+    //m_sunTransform = std::make_unique<Scene::Transform>();
+
+    // Точечный свет с Toon shading
+    m_pointLight = std::make_unique<Scene::Light>(Scene::Light::Type::Point);
+    m_pointLight->SetColor(glm::vec3(1.0f, 1.0f, 1.0f));
+    m_pointLight->SetIntensity(50.0f);
+    m_pointLight->SetRange(20.0f);
+
+    //// === НАСТРОЙКА Toon shading ===
+    //m_pointLight->SetShadingModel(Scene::Light::ShadingModel::Toon);
+    //m_pointLight->SetToonSteps(4);    // 4 уровня освещения
+    //m_pointLight->SetSoftness(0.1f);  // Резкие переходы
+
+    m_pointLightTransform = std::make_unique<Scene::Transform>();
+    m_pointLightTransform->SetPosition(glm::vec3(3.0f, 3.0f, 3.0f));  // Позиция точечного света
 }
 
 void MeadowApp::DrawFrame() {
@@ -537,4 +615,85 @@ void MeadowApp::DrawFrame() {
     }
     
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void MeadowApp::UpdateCamera() {
+    // Rotation with mouse (hold left button)
+    if (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+        double xpos, ypos;
+        glfwGetCursorPos(m_window, &xpos, &ypos);
+
+        static double lastX = xpos, lastY = ypos;
+        static bool firstMouse = true;
+
+        if (firstMouse) {
+            lastX = xpos;
+            lastY = ypos;
+            firstMouse = false;
+        }
+
+        double deltaX = xpos - lastX;
+        double deltaY = ypos - lastY;
+
+        m_cameraRotationY += deltaX * 0.01f;
+        m_cameraRotationX += deltaY * 0.01f;
+        m_cameraRotationX = glm::clamp(m_cameraRotationX, -1.5f, 1.5f);
+
+        lastX = xpos;
+        lastY = ypos;
+    }
+
+    // Update camera position based on rotation
+    float distance = 5.0f;
+    m_cameraPos.x = distance * sin(m_cameraRotationY) * cos(m_cameraRotationX);
+    m_cameraPos.y = distance * sin(m_cameraRotationX);
+    m_cameraPos.z = distance * cos(m_cameraRotationY) * cos(m_cameraRotationX);
+}
+
+void MeadowApp::HandleSkyControls() {
+    //using namespace Core;
+    //// Example: keyboard controls for sky parameters
+    //if (Core::Input::IsKeyPressed(GLFW_KEY_1)) {
+    //    m_skyRenderer->SetTimeOfDay(6.0f);  // Sunrise
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_2)) {
+    //    m_skyRenderer->SetTimeOfDay(12.0f); // Noon
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_3)) {
+    //    m_skyRenderer->SetTimeOfDay(18.0f); // Sunset
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_4)) {
+    //    m_skyRenderer->SetTimeOfDay(0.0f);  // Midnight
+    //}
+
+    //// Cloud control
+    //if (Input::IsKeyPressed(GLFW_KEY_C)) {
+    //    auto params = m_skyRenderer->GetSkyParams();
+    //    params.cloudCoverage = std::min(1.0f, params.cloudCoverage + 0.1f);
+    //    m_skyRenderer->SetSkyParams(params);
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_V)) {
+    //    auto params = m_skyRenderer->GetSkyParams();
+    //    params.cloudCoverage = std::max(0.0f, params.cloudCoverage - 0.1f);
+    //    m_skyRenderer->SetSkyParams(params);
+    //}
+
+    //// Quality presets
+    //if (Input::IsKeyPressed(GLFW_KEY_F1)) {
+    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::Low);
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_F2)) {
+    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::Medium);
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_F3)) {
+    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::High);
+    //}
+    //if (Input::IsKeyPressed(GLFW_KEY_F4)) {
+    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::Ultra);
+    //}
+
+    //// Animation control
+    //if (Input::IsKeyPressed(GLFW_KEY_SPACE)) {
+    //    m_skyRenderer->SetAutoAnimate(!m_skyRenderer->GetAutoAnimate());
+    //}
 }

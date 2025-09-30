@@ -25,11 +25,13 @@ set(SRC
     core/job_system.cpp
     core/time_utils.cpp
     core/window.cpp
+    core/core_context.cpp
     physics/collider.cpp
     renderer/material_system.cpp
     renderer/shadow_mapper.cpp
     renderer/sky_renderer.cpp
     renderer/triangle_renderer.cpp
+    renderer/CubeRenderer.cpp
     rhi/vulkan/async_resource_loader.cpp
     rhi/vulkan/command_buffer_optimizer.cpp
     rhi/vulkan/command_pool.cpp
@@ -39,6 +41,7 @@ set(SRC
     rhi/vulkan/shader_manager.cpp
     rhi/vulkan/staging_buffer_pool.cpp
     rhi/vulkan/swapchain.cpp
+    rhi/vulkan/compute_pipeline.cpp
     world/fps_player.cpp
     world/meadow_scene.cpp
     external/volk_impl.cpp
@@ -47,9 +50,13 @@ set(SRC
 
 add_executable(VulkanSandbox ${SRC})
 
+# Устанавливаем рабочую директорию при отладке в Visual Studio
+set_target_properties(VulkanSandbox PROPERTIES
+    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:VulkanSandbox>"
+)
+
 # PCH
 target_precompile_headers(VulkanSandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
-target_sources(VulkanSandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 
 # Include dirs
 target_include_directories(VulkanSandbox
@@ -83,35 +90,14 @@ target_link_directories(VulkanSandbox PRIVATE
 )
 target_link_libraries(VulkanSandbox PRIVATE Vulkan::Vulkan glfw3 user32 gdi32 shell32)
 
-# Компиляторные опции Debug / Release (разделяем каждую опцию)
-if(MSVC)
-    # Debug
-    target_compile_options(VulkanSandbox PRIVATE
-        $<$<CONFIG:Debug>:/MDd>
-        $<$<CONFIG:Debug>:/Zi>
-        $<$<CONFIG:Debug>:/Od>
-        $<$<CONFIG:Debug>:/RTC1>
-    )
-    target_link_libraries(VulkanSandbox PRIVATE
-        $<$<CONFIG:Debug>:$ENV{VULKAN_SDK}/Lib/shaderc_combinedd.lib>
-    )
-
-    # Release
-    target_compile_options(VulkanSandbox PRIVATE
-        $<$<CONFIG:Release>:/MD>
-        $<$<CONFIG:Release>:/O2>
-        $<$<CONFIG:Release>:/DNDEBUG>
-    )
-    target_link_libraries(VulkanSandbox PRIVATE
-        $<$<CONFIG:Release>:$ENV{VULKAN_SDK}/Lib/shaderc_combined.lib>
-    )
-endif()
-
-# Копирование шейдеров
-file(GLOB SHADERS "${CMAKE_SOURCE_DIR}/shaders/*")
+# Копирование всех шейдеров рекурсивно
+file(GLOB_RECURSE SHADERS "${CMAKE_SOURCE_DIR}/shaders/*")
 foreach(shader ${SHADERS})
-    configure_file(${shader} ${CMAKE_BINARY_DIR}/shaders COPYONLY)
+    file(RELATIVE_PATH relPath ${CMAKE_SOURCE_DIR}/shaders ${shader})
+    configure_file(${shader} ${CMAKE_BINARY_DIR}/shaders/${relPath} COPYONLY)
 endforeach()
+
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT VulkanSandbox)
 
 # Общие предупреждения компилятора
 if(MSVC)

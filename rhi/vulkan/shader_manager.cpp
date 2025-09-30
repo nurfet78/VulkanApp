@@ -1,7 +1,6 @@
 // engine/rhi/vulkan/shader_manager.cpp
 #include "shader_manager.h"
 #include "device.h"
-#include <shaderc/shaderc.hpp>  // Assume we have shaderc for GLSL compilation
 
 namespace RHI::Vulkan {
 
@@ -95,46 +94,6 @@ namespace RHI::Vulkan {
         return true;
     }
 
-    std::vector<uint32_t> ShaderProgram::CompileGLSL(const std::string& source, VkShaderStageFlagBits stage, const std::string& sourceName) {
-        shaderc::Compiler compiler;
-        shaderc::CompileOptions options;
-
-        options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
-        options.SetTargetSpirv(shaderc_spirv_version_1_6);
-
-        // --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
-        // Явно включаем генерацию отладочной информации.
-        // Это заставляет shaderc использовать более стабильный кодовый путь
-        // для генерации инструкций OpName и решает проблему с валидацией.
-        options.SetGenerateDebugInfo();
-
-        // Режим оптимизации можно менять (performance или size)
-        options.SetOptimizationLevel(shaderc_optimization_level_performance);
-
-        shaderc_shader_kind kind;
-        switch (stage) {
-        case VK_SHADER_STAGE_VERTEX_BIT:                   kind = shaderc_glsl_vertex_shader; break;
-        case VK_SHADER_STAGE_FRAGMENT_BIT:                 kind = shaderc_glsl_fragment_shader; break;
-        case VK_SHADER_STAGE_COMPUTE_BIT:                  kind = shaderc_glsl_compute_shader; break;
-        case VK_SHADER_STAGE_GEOMETRY_BIT:                 kind = shaderc_glsl_geometry_shader; break;
-        case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:     kind = shaderc_glsl_tess_control_shader; break;
-        case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:  kind = shaderc_glsl_tess_evaluation_shader; break;
-        default:
-            std::cerr << "Unsupported shader stage for compilation." << std::endl;
-            return {};
-        }
-
-        // Передаем настоящее имя файла для более информативных ошибок
-        shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(source, kind, sourceName.c_str(), options);
-
-        if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
-            std::cerr << "Shader compilation failed for " << sourceName << ":\n" << result.GetErrorMessage() << std::endl;
-            return {};
-        }
-
-        return { result.cbegin(), result.cend() };
-    }
-
 
     std::vector<VkPipelineShaderStageCreateInfo> ShaderProgram::GetStageCreateInfos() const {
         std::vector<VkPipelineShaderStageCreateInfo> infos;
@@ -180,6 +139,38 @@ namespace RHI::Vulkan {
         m_programs.erase(name);
     }
 
+    VkShaderModule ShaderManager::LoadShader(const std::string& path, VkShaderStageFlagBits stage) {
+        if (!std::filesystem::exists(path)) {
+            std::cerr << "Shader not found: " << path << std::endl;
+            return VK_NULL_HANDLE;
+        }
+
+        std::ifstream file(path, std::ios::ate | std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open shader: " << path << std::endl;
+            return VK_NULL_HANDLE;
+        }
+
+        size_t fileSize = (size_t)file.tellg();
+        std::vector<uint32_t> spirv(fileSize / sizeof(uint32_t));
+        file.seekg(0);
+        file.read(reinterpret_cast<char*>(spirv.data()), fileSize);
+        file.close();
+
+        VkShaderModuleCreateInfo moduleInfo{};
+        moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        moduleInfo.codeSize = spirv.size() * sizeof(uint32_t);
+        moduleInfo.pCode = spirv.data();
+
+        VkShaderModule module;
+        if (vkCreateShaderModule(m_device->GetDevice(), &moduleInfo, nullptr, &module) != VK_SUCCESS) {
+            std::cerr << "Failed to create shader module: " << path << std::endl;
+            return VK_NULL_HANDLE;
+        }
+
+        return module;
+    }
+
     // ReloadablePipeline implementation
     ReloadablePipeline::ReloadablePipeline(Device* device, ShaderManager* shaderManager)
         : m_device(device), m_shaderManager(shaderManager) {
@@ -212,24 +203,22 @@ namespace RHI::Vulkan {
 
         // Создаем pipeline layout, если он еще не создан.
         // Layout зависит от дескрипторов и push-констант, и обычно не меняется при перезагрузке шейдеров.
-        if (!m_pipelineLayout) {
-            VkPushConstantRange pushConstantRange{};
-            pushConstantRange.stageFlags = m_createInfo.pushConstantStages;
-            pushConstantRange.offset = 0;
-            pushConstantRange.size = m_createInfo.pushConstantSize;
-
+        if (m_createInfo.externalLayout != VK_NULL_HANDLE) {
+            m_pipelineLayout = m_createInfo.externalLayout;
+            m_ownsLayout = false;  // НЕ уничтожать в деструкторе
+        } else if (!m_pipelineLayout) {
             VkPipelineLayoutCreateInfo layoutInfo{};
             layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             layoutInfo.setLayoutCount = m_createInfo.descriptorLayoutCount;
             layoutInfo.pSetLayouts = m_createInfo.descriptorLayouts;
+            layoutInfo.pushConstantRangeCount = static_cast<uint32_t>(m_createInfo.pushConstants.size());
+            layoutInfo.pPushConstantRanges = m_createInfo.pushConstants.empty() ? nullptr
+                : m_createInfo.pushConstants.data();
 
-            if (m_createInfo.pushConstantSize > 0) {
-                layoutInfo.pushConstantRangeCount = 1;
-                layoutInfo.pPushConstantRanges = &pushConstantRange;
-            }
 
             if (vkCreatePipelineLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-                std::cerr << "Failed to create pipeline layout for shader: " << m_shaderProgram->GetName() << std::endl;
+                std::cerr << "Failed to create pipeline layout for shader: "
+                    << m_shaderProgram->GetName() << std::endl;
                 return false;
             }
         }
@@ -283,23 +272,30 @@ namespace RHI::Vulkan {
         // 6. Тест глубины и трафарета (Depth/Stencil)
         VkPipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depthStencil.depthTestEnable = m_createInfo.depthTestEnable;
-        depthStencil.depthWriteEnable = m_createInfo.depthWriteEnable;
+        depthStencil.depthTestEnable = m_createInfo.depthTestEnable ? VK_TRUE : VK_FALSE;
+        depthStencil.depthWriteEnable = m_createInfo.depthWriteEnable ? VK_TRUE : VK_FALSE;
         depthStencil.depthCompareOp = m_createInfo.depthCompareOp;
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.stencilTestEnable = VK_FALSE;
 
         // 7. Смешивание цветов (Color Blending)
         VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        colorBlendAttachment.colorWriteMask = 
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        colorBlendAttachment.blendEnable = m_createInfo.blendEnable;
-        colorBlendAttachment.srcColorBlendFactor = m_createInfo.srcColorBlendFactor;
-        colorBlendAttachment.dstColorBlendFactor = m_createInfo.dstColorBlendFactor;
-        colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-        colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        colorBlendAttachment.blendEnable = m_createInfo.blendEnable ? VK_TRUE : VK_FALSE;
+
+        if (m_createInfo.blendEnable) {
+
+            colorBlendAttachment.srcColorBlendFactor = m_createInfo.srcColorBlendFactor;
+            colorBlendAttachment.dstColorBlendFactor = m_createInfo.dstColorBlendFactor;
+            colorBlendAttachment.colorBlendOp = m_createInfo.colorBlendOp;
+
+            colorBlendAttachment.srcAlphaBlendFactor = m_createInfo.srcAlphaBlendFactor;
+            colorBlendAttachment.dstAlphaBlendFactor = m_createInfo.dstAlphaBlendFactor;
+            colorBlendAttachment.alphaBlendOp = m_createInfo.alphaBlendOp;
+        }
+
 
         VkPipelineColorBlendStateCreateInfo colorBlending{};
         colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -324,6 +320,7 @@ namespace RHI::Vulkan {
         renderingInfo.pColorAttachmentFormats = &m_createInfo.colorFormat;
         renderingInfo.depthAttachmentFormat = m_createInfo.depthFormat;
         // stencilAttachmentFormat остается по умолчанию VK_FORMAT_UNDEFINED
+
 
         // --- СБОРКА И СОЗДАНИЕ ПАЙПЛАЙНА ---
 
@@ -363,13 +360,107 @@ namespace RHI::Vulkan {
         return true;
     }
 
+    ReloadablePipeline::CreateInfo ReloadablePipeline::MakePipelineInfo(
+        const std::string& shaderName,
+        VkFormat colorFormat,
+        VkDescriptorSetLayout* layouts,
+        uint32_t layoutCount,
+        bool blendEnable,
+        VkBlendFactor srcColorBlend,
+        VkBlendFactor dstColorBlend,
+        VkBlendOp colorOp,
+        VkBlendFactor srcAlphaBlend,
+        VkBlendFactor dstAlphaBlend,
+        VkBlendOp alphaOp
+    ) {
+        CreateInfo info{};
+        info.shaderProgram = shaderName;
+        info.colorFormat = colorFormat;
+
+        // Default pipeline state
+        info.depthFormat = VK_FORMAT_UNDEFINED;   // без depth по умолчанию
+        info.depthTestEnable = false;
+        info.depthWriteEnable = false;
+        info.cullMode = VK_CULL_MODE_NONE;
+        info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // Vertex input отключен (fullscreen quad, скрины и т.п.)
+        info.vertexBindings = {};
+        info.vertexAttributes = {};
+
+        // Blend
+        info.blendEnable = blendEnable;
+        info.srcColorBlendFactor = srcColorBlend;
+        info.dstColorBlendFactor = dstColorBlend;
+        info.colorBlendOp = colorOp;
+        info.srcAlphaBlendFactor = srcAlphaBlend;
+        info.dstAlphaBlendFactor = dstAlphaBlend;
+        info.alphaBlendOp = alphaOp;
+
+        // Layout
+        info.descriptorLayouts = layouts;
+        info.descriptorLayoutCount = layoutCount;
+
+        return info;
+    }
+
+    ReloadablePipeline::CreateInfo ReloadablePipeline::Make3DPipelineInfo(
+        const std::string& shaderName,
+        VkFormat colorFormat,
+        VkFormat depthFormat,
+        VkDescriptorSetLayout* layouts,
+        uint32_t layoutCount,
+        const std::vector<VkVertexInputBindingDescription>& vertexBindings,
+        const std::vector<VkVertexInputAttributeDescription>& vertexAttributes,
+        const std::vector<VkPushConstantRange>& pushConstants,
+        VkCullModeFlags cullMode,
+        bool blendEnable
+    ) {
+        CreateInfo info{};
+        info.shaderProgram = shaderName;
+        info.colorFormat = colorFormat;
+
+        // 3D-specific defaults
+        info.depthFormat = depthFormat;
+        info.depthTestEnable = true;
+        info.depthWriteEnable = true;
+        info.depthCompareOp = VK_COMPARE_OP_LESS;
+        info.cullMode = cullMode;
+        info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // Vertex input
+        info.vertexBindings = vertexBindings;
+        info.vertexAttributes = vertexAttributes;
+
+        // Push constants
+        info.pushConstants = pushConstants;
+
+        // Blending (обычно false для 3D объектов)
+        info.blendEnable = blendEnable;
+        if (!blendEnable) {
+            info.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            info.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+            info.colorBlendOp = VK_BLEND_OP_ADD;
+            info.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            info.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            info.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
+
+        // Layout
+        info.descriptorLayouts = layouts;
+        info.descriptorLayoutCount = layoutCount;
+
+        return info;
+    }
+
     void ReloadablePipeline::Destroy() {
         if (m_pipeline) {
             vkDestroyPipeline(m_device->GetDevice(), m_pipeline, nullptr);
             m_pipeline = VK_NULL_HANDLE;
         }
 
-        if (m_pipelineLayout) {
+        if (m_pipelineLayout && m_ownsLayout) {
             vkDestroyPipelineLayout(m_device->GetDevice(), m_pipelineLayout, nullptr);
             m_pipelineLayout = VK_NULL_HANDLE;
         }

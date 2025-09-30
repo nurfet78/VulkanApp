@@ -238,7 +238,7 @@ Buffer* StagingBufferPool::AcquireBuffer(size_t size) {
     auto& entry = pool.back();
     entry.buffer = std::make_unique<Buffer>(
         m_device, size,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT,
         VMA_MEMORY_USAGE_CPU_TO_GPU
     );
     entry.inUse = true;

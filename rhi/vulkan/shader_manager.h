@@ -1,4 +1,4 @@
-// engine/rhi/vulkan/shader_manager.h
+﻿// engine/rhi/vulkan/shader_manager.h
 #pragma once
 
 #include "vulkan_common.h"
@@ -38,7 +38,6 @@ namespace RHI::Vulkan {
 
     private:
         bool CompileStage(ShaderStageInfo& stage);
-        std::vector<uint32_t> CompileGLSL(const std::string& source, VkShaderStageFlagBits stage, const std::string& sourceName);
 
         Device* m_device;
         std::string m_name;
@@ -56,6 +55,8 @@ namespace RHI::Vulkan {
         ShaderProgram* CreateProgram(const std::string& name);
         ShaderProgram* GetProgram(const std::string& name);
         void RemoveProgram(const std::string& name);
+
+        VkShaderModule LoadShader(const std::string& path, VkShaderStageFlagBits stage);
 
     private:
         Device* m_device;
@@ -88,8 +89,14 @@ namespace RHI::Vulkan {
 
             // Blend state
             bool blendEnable = false;
+
             VkBlendFactor srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
             VkBlendFactor dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            VkBlendOp colorBlendOp = VK_BLEND_OP_ADD;
+
+            VkBlendFactor srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            VkBlendFactor dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            VkBlendOp alphaBlendOp = VK_BLEND_OP_ADD;
 
             // Render state
             VkFormat colorFormat = VK_FORMAT_B8G8R8A8_SRGB;
@@ -98,8 +105,10 @@ namespace RHI::Vulkan {
             // Layout
             VkDescriptorSetLayout* descriptorLayouts = nullptr;
             uint32_t descriptorLayoutCount = 0;
-            uint32_t pushConstantSize = 0;
-            VkShaderStageFlags pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT;
+            VkPipelineLayout externalLayout = VK_NULL_HANDLE;
+
+            // Push constants
+            std::vector<VkPushConstantRange> pushConstants;
         };
 
         bool Create(const CreateInfo& info);
@@ -112,6 +121,33 @@ namespace RHI::Vulkan {
         VkPipeline GetPipeline() const { return m_pipeline; }
         VkPipelineLayout GetLayout() const { return m_pipelineLayout; }
 
+        static CreateInfo MakePipelineInfo(
+            const std::string& shaderName,
+            VkFormat colorFormat,
+            VkDescriptorSetLayout* layouts,
+            uint32_t layoutCount,
+            bool blendEnable,
+            VkBlendFactor srcColorBlend = VK_BLEND_FACTOR_SRC_ALPHA,
+            VkBlendFactor dstColorBlend = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            VkBlendOp colorOp = VK_BLEND_OP_ADD,
+            VkBlendFactor srcAlphaBlend = VK_BLEND_FACTOR_ONE,
+            VkBlendFactor dstAlphaBlend = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            VkBlendOp alphaOp = VK_BLEND_OP_ADD
+        );
+
+        static CreateInfo Make3DPipelineInfo(
+            const std::string& shaderName,
+            VkFormat colorFormat,
+            VkFormat depthFormat,
+            VkDescriptorSetLayout* layouts,
+            uint32_t layoutCount,
+            const std::vector<VkVertexInputBindingDescription>& vertexBindings,
+            const std::vector<VkVertexInputAttributeDescription>& vertexAttributes,
+            const std::vector<VkPushConstantRange>& pushConstants = {},
+            VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT,
+            bool blendEnable = false
+        );
+
     private:
         bool CreatePipeline();
 
@@ -123,5 +159,6 @@ namespace RHI::Vulkan {
 
         VkPipeline m_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+        bool m_ownsLayout = true;
     };
 }

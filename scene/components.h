@@ -290,51 +290,78 @@ public:
         Point,
         Spot
     };
+
+    // Добавляем enum для типов освещения
+    enum class ShadingModel {
+        Lambert,        // Обычное освещение max(dot(N,L), 0)
+        HalfLambert,    // Мягкое освещение (dot(N,L) * 0.5 + 0.5)^2
+        OrenNayar,      // Для шероховатых поверхностей
+        Minnaert,       // Для бархатистых поверхностей
+        Toon           // Cartoon-style освещение
+    };
     
     Light() = default;
     explicit Light(Type type) : m_type(type) {}
-    
+
+    // Existing methods...
     void SetType(Type type) { m_type = type; }
     Type GetType() const { return m_type; }
-    
+
     void SetColor(const glm::vec3& color) { m_color = color; }
     glm::vec3 GetColor() const { return m_color; }
-    
+
     void SetIntensity(float intensity) { m_intensity = intensity; }
     float GetIntensity() const { return m_intensity; }
-    
-    // Directional/Spot light
+
     void SetDirection(const glm::vec3& direction) { m_direction = glm::normalize(direction); }
     glm::vec3 GetDirection() const { return m_direction; }
-    
-    // Point/Spot light
+
     void SetRange(float range) { m_range = range; }
     float GetRange() const { return m_range; }
-    
-    // Spot light
+
     void SetInnerCone(float angle) { m_innerCone = angle; }
     float GetInnerCone() const { return m_innerCone; }
-    
+
     void SetOuterCone(float angle) { m_outerCone = angle; }
     float GetOuterCone() const { return m_outerCone; }
-    
-    // Shadows
+
     void SetCastShadows(bool cast) { m_castShadows = cast; }
     bool CastsShadows() const { return m_castShadows; }
-    
+
     void SetShadowBias(float bias) { m_shadowBias = bias; }
     float GetShadowBias() const { return m_shadowBias; }
 
+    // === НОВЫЕ МЕТОДЫ для shading model ===
+    void SetShadingModel(ShadingModel model) { m_shadingModel = model; }
+    ShadingModel GetShadingModel() const { return m_shadingModel; }
+
+    // Параметры для Half-Lambert
+    void SetWrapFactor(float wrap) { m_wrapFactor = wrap; }
+    float GetWrapFactor() const { return m_wrapFactor; }
+
+    // Параметр для Toon shading (количество уровней)
+    void SetToonSteps(int steps) { m_toonSteps = steps; }
+    int GetToonSteps() const { return m_toonSteps; }
+
+    // Параметр мягкости для различных моделей
+    void SetSoftness(float softness) { m_softness = softness; }
+    float GetSoftness() const { return m_softness; }
+
 private:
     Type m_type = Type::Directional;
-    glm::vec3 m_color{1.0f};
+    glm::vec3 m_color{ 1.0f };
     float m_intensity = 1.0f;
-    glm::vec3 m_direction{0.0f, -1.0f, 0.0f};
+    glm::vec3 m_direction{ 0.0f, -1.0f, 0.0f };
     float m_range = 10.0f;
     float m_innerCone = 30.0f;
     float m_outerCone = 45.0f;
     bool m_castShadows = true;
     float m_shadowBias = 0.005f;
+
+    ShadingModel m_shadingModel = ShadingModel::Lambert;
+    float m_wrapFactor = 0.5f;      // Для Half-Lambert: насколько "заворачивать" освещение
+    int m_toonSteps = 3;            // Для Toon shading: количество ступеней освещения
+    float m_softness = 1.0f;        // Общий параметр мягкости
 };
 
 // Tag Component for entity identification

@@ -11,12 +11,25 @@ namespace RHI::Vulkan {
     class Swapchain;
     class CommandPoolManager;
     class ResourceManager;
-    class TriangleRenderer;
     class ShaderManager;
+    class Image;
 }
 
+
 namespace Renderer {
-    class SkyRenderer;
+    class TriangleRenderer;
+    class CubeRenderer;
+    class MaterialSystem;
+}
+
+namespace Core {
+    class CoreContext;
+}
+
+namespace Scene {
+    class Camera;
+    class Transform;
+    class Light;
 }
 
 class MeadowApp : public Core::Application {
@@ -41,15 +54,21 @@ private:
     };
 
     void CreateSyncObjects();
+    void CreateDepthBuffer();
+    void InitializeScene();
     void DestroySyncObjects();
     void RecreateSwapchain();
     void RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
     void DrawFrame();
 
+    void CollectLightData(float currentTime);
+
     void LoadShaders();
 
     void Update();
     void UpdateCamera();
+
+    void HandleSkyControls();
 
     GLFWwindow* m_window = nullptr;
 
@@ -59,12 +78,24 @@ private:
     std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
     std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
     std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;
-    std::unique_ptr<RHI::Vulkan::TriangleRenderer> m_trianglePipeline;
-    std::unique_ptr<Renderer::SkyRenderer> m_skyRenderer;
+    std::unique_ptr<Renderer::TriangleRenderer> m_trianglePipeline;
+    std::unique_ptr<Core::CoreContext> m_coreContext;
 
-    // Камера
-    glm::vec3 m_cameraPos = glm::vec3(0.0f, 2.0f, 5.0f);
-    glm::vec3 m_cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+    std::unique_ptr<Renderer::MaterialSystem> m_materialSystem;
+    std::unique_ptr<Renderer::CubeRenderer> m_cubeRenderer;
+    std::unique_ptr<RHI::Vulkan::Image> m_depthBuffer;
+    std::unique_ptr<Scene::Camera> m_camera;
+    std::unique_ptr<Scene::Transform> m_cubeTransform;
+
+    // Источники света
+    std::unique_ptr<Scene::Light> m_sunLight;      // Солнце
+    std::unique_ptr<Scene::Transform> m_sunTransform;
+
+    std::unique_ptr<Scene::Light> m_pointLight;    // Точечный свет
+    std::unique_ptr<Scene::Transform> m_pointLightTransform;
+
+    // Camera control variables
+    glm::vec3 m_cameraPos{ 5.0f, 3.0f, 5.0f };  // Initial camera position
     float m_cameraRotationX = 0.0f;
     float m_cameraRotationY = 0.0f;
 

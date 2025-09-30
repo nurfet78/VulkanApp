@@ -1,361 +1,2083 @@
-// engine/renderer/sky_renderer.cpp
+Ôªø// SkyRenderer.cpp - Implementation
 #include "sky_renderer.h"
 #include "rhi/vulkan/device.h"
-#include "rhi/vulkan/shader_manager.h"
 #include "rhi/vulkan/resource.h"
 #include "rhi/vulkan/descriptor_allocator.h"
+#include "rhi/vulkan/command_pool.h"
+#include "rhi/vulkan/compute_pipeline.h"
+#include "core/core_context.h"
 
 namespace Renderer {
 
+    // Constants for atmosphere simulation
+    constexpr float EARTH_RADIUS = 6371000.0f;        // Earth radius in meters
+    constexpr float ATMOSPHERE_RADIUS = 6471000.0f;   // Atmosphere outer radius
+    constexpr float ATMOSPHERE_HEIGHT = 100000.0f;    // 100km atmosphere height
+    constexpr float SUN_ANGULAR_RADIUS = 0.00465f;    // Sun's angular radius
+    constexpr float MOON_ANGULAR_RADIUS = 0.00257f;   // Moon's angular radius
+
+    // Quality presets
+    struct QualitySettings {
+        uint32_t skyResolution;
+        uint32_t cloudResolution;
+        uint32_t starResolution;
+        int atmosphereSamples;
+        int cloudSamples;
+        bool volumetricClouds;
+        bool temporalAccumulation;
+        int cloudOctaves;
+    };
+
+    static const QualitySettings g_qualityPresets[] = {
+        {512,  256,  512,  8,  16, false, false, 2}, // Low
+        {1024, 512,  1024, 16, 32, true,  false, 3}, // Medium
+        {2048, 1024, 2048, 32, 64, true,  true,  4}, // High
+        {4096, 2048, 4096, 64, 128, true, true,  5}  // Ultra
+    };
+
     SkyRenderer::SkyRenderer(RHI::Vulkan::Device* device,
+        Core::CoreContext* context,
         RHI::Vulkan::ShaderManager* shaderManager,
         VkFormat colorFormat,
         VkFormat depthFormat)
         : m_device(device)
+        , m_context(context)
         , m_shaderManager(shaderManager)
-    {
-        CreateUniformBuffer();      // —ÓÁ‰‡∏Ï uniform buffer
-        CreateDescriptorSet();      // —ÓÁ‰‡∏Ï descriptor set
-        CreatePipeline(colorFormat, depthFormat);
-        CreateIBLResources();
-        UpdateSunPosition();
-        UpdateUniformBuffer();      // «‡ÔÓÎÌˇÂÏ uniform buffer Ì‡˜‡Î¸Ì˚ÏË ‰‡ÌÌ˚ÏË
+        , m_colorFormat(colorFormat) 
+        , m_depthFormat(depthFormat) {
+
+        // Initialize default cloud layers
+        m_cloudLayers.push_back({ 2000.0f, 500.0f, 0.5f, 0.1f, 1.0f, 0 }); // Cumulus
+        m_cloudLayers.push_back({ 8000.0f, 200.0f, 0.3f, 0.2f, 2.0f, 2 }); // Cirrus
+
+        // Create resources
+        CreateUniformBuffers();
+        CreateTextures();
+        CreateRenderTargets();
+        CreateSamplers();
+        CreateLUTs();
+
+        // Create pipelines
+        CreateAtmospherePipeline();
+        CreateCloudPipeline();
+        CreateStarsPipeline();
+        CreatePostProcessPipeline();
+        CreateComputePipelines();
+
+        // Create descriptor sets
+        CreateDescriptorSets();
+
+        // Initial setup
+        SetTimeOfDay(12.0f);
+        UpdateAtmosphere();
+
+        m_needsCloudGeneration = true;
+        m_needsLUTGeneration = true;
+        m_needsStarGeneration = true;
+
+        // Generate initial procedural content
+       /* VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute(); 
+        GenerateAtmosphereLUT(cmd);
+        GenerateCloudNoise(cmd);
+        GenerateStarTexture(cmd);
+        context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);*/
     }
 
     SkyRenderer::~SkyRenderer() {
-        // 1. —·ÓÒ pipeline
-        m_pipeline.reset(); // ÛÏÌ˚È ÛÍ‡Á‡ÚÂÎ¸, ‚˚ÁÓ‚ÂÚ Destroy() ReloadablePipeline
-
-        // 2. —·ÓÒ uniform buffer
-        m_uniformBuffer.reset();
-
-        // 3. ƒÂÒÚÓÈ ‰ÂÒÍËÔÚ-ÒÂÚ‡ Ë layout
-        // Descriptor set ÓÒ‚Ó·ÓÊ‰‡ÂÚÒˇ ÔÛÎÓÏ, Â„Ó ÛÌË˜ÚÓÊ‡Ú¸ ÌÂ ÌÛÊÌÓ
-        if (m_descriptorSetLayout) {
-            vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_descriptorSetLayout, nullptr);
-            m_descriptorSetLayout = VK_NULL_HANDLE;
-        }
-    }
-
-    void SkyRenderer::CreateUniformBuffer() {
-        // —ÓÁ‰‡∏Ï uniform buffer ‰Îˇ ı‡ÌÂÌËˇ ˆ‚ÂÚÓ‚˚ı Ô‡‡ÏÂÚÓ‚
-        VkDeviceSize bufferSize = sizeof(SkyUniformData);
-
-        m_uniformBuffer = std::make_unique<RHI::Vulkan::Buffer>(
-            m_device,
-            bufferSize,
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VMA_MEMORY_USAGE_CPU_TO_GPU
-        );
-    }
-
-    void SkyRenderer::CreateDescriptorSet() {
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = m_uniformBuffer->GetHandle();
-        bufferInfo.offset = 0;
-        bufferInfo.range = sizeof(SkyUniformData);
-
-        // »ÒÔÓÎ¸ÁÛÂÏ DescriptorBuilder
-        bool ok = RHI::Vulkan::DescriptorBuilder::Begin(
-            m_device->GetDescriptorLayoutCache(),
-            m_device->GetDescriptorAllocator())
-            .BindBuffer(0, &bufferInfo,
-                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                VK_SHADER_STAGE_FRAGMENT_BIT)
-            .Build(m_descriptorSet, m_descriptorSetLayout);
-
-        if (!ok) {
-            throw std::runtime_error("SkyRenderer: failed to build descriptor set!");
-        }
-    }
-
-    void SkyRenderer::CreatePipeline(VkFormat colorFormat, VkFormat depthFormat) {
-        RHI::Vulkan::ReloadablePipeline::CreateInfo pipelineInfo{};
-
-        pipelineInfo.shaderProgram = "Sky";
-
-        // Push constants - ÚÂÔÂ¸ ÏÂÌ¸¯Â„Ó ‡ÁÏÂ‡!
-        pipelineInfo.pushConstantSize = sizeof(SkyPushConstants);
-        pipelineInfo.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-        pipelineInfo.descriptorLayouts = &m_descriptorSetLayout;  // ÛÍ‡Á‡ÚÂÎ¸ Ì‡ Ó‰ËÌ layout
-        pipelineInfo.descriptorLayoutCount = 1;                   // Ó·ˇÁ‡ÚÂÎ¸ÌÓ ÍÓÎË˜ÂÒÚ‚Ó
+       
+        vkDeviceWaitIdle(m_device->GetDevice());
 
 
-        pipelineInfo.colorFormat = colorFormat;
-        pipelineInfo.depthFormat = depthFormat;
+        // Cleanup samplers
+        if (m_linearSampler) vkDestroySampler(m_device->GetDevice(), m_linearSampler, nullptr);
+        if (m_nearestSampler) vkDestroySampler(m_device->GetDevice(), m_nearestSampler, nullptr);
+        if (m_cloudSampler) vkDestroySampler(m_device->GetDevice(), m_cloudSampler, nullptr);
 
-        pipelineInfo.depthTestEnable = true;
-        pipelineInfo.depthWriteEnable = false;
-        pipelineInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-        pipelineInfo.cullMode = VK_CULL_MODE_NONE;
-
-        pipelineInfo.vertexBindings = {};
-        pipelineInfo.vertexAttributes = {};
-
-        m_pipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
-        if (!m_pipeline->Create(pipelineInfo)) {
-            throw std::runtime_error("Failed to create sky pipeline!");
-        }
-    }
-
-    void SkyRenderer::UpdateUniformBuffer() {
-
-        SkyUniformData ubo{};
-        ubo.dayHorizonColor = glm::vec4(m_skyParams.dayHorizonColor, 1.0f);
-        ubo.dayZenithColor = glm::vec4(m_skyParams.dayZenithColor, 1.0f);
-        ubo.sunsetHorizonColor = glm::vec4(m_skyParams.sunsetHorizonColor, 1.0f);
-        ubo.sunsetZenithColor = glm::vec4(m_skyParams.sunsetZenithColor, 1.0f);
-        ubo.nightHorizonColor = glm::vec4(m_skyParams.nightHorizonColor, 1.0f);
-        ubo.nightZenithColor = glm::vec4(m_skyParams.nightZenithColor, 1.0f);
-        ubo.groundColor = glm::vec4(m_skyParams.groundColor, 1.0f);
-        ubo.sunColor = glm::vec4(m_skyParams.sunColor, 1.0f);
-
-        m_uniformBuffer->Upload(&ubo, sizeof(ubo));
-    }
-
-    void SkyRenderer::CreateIBLResources() {
-        // Environment map (cube map) ‰Îˇ ÓÚ‡ÊÂÌËÈ
-        m_environmentMap = std::make_unique<RHI::Vulkan::Image>(
-            m_device, 512, 512, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT
-        );
-
-        // Irradiance map ‰Îˇ ‰ËÙÙÛÁÌÓ„Ó IBL
-        m_irradianceMap = std::make_unique<RHI::Vulkan::Image>(
-            m_device, 32, 32, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT
-        );
-
-        // Prefilter map ‰Îˇ ÁÂÍ‡Î¸ÌÓ„Ó IBL
-        m_prefilterMap = std::make_unique<RHI::Vulkan::Image>(
-            m_device, 128, 128, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT
-        );
-
-        // BRDF LUT
-        m_brdfLUT = std::make_unique<RHI::Vulkan::Image>(
-            m_device, 512, 512, VK_FORMAT_R16G16_SFLOAT,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT
-        );
-    }
-
-    void SkyRenderer::UpdateSunPosition() {
-        // ¬˚˜ËÒÎˇÂÏ ÔÓÎÓÊÂÌËÂ ÒÓÎÌˆ‡ Ì‡ ÓÒÌÓ‚Â ‚ÂÏÂÌË ‰Ìˇ
-        float sunAngle = (m_timeOfDay - 6.0f) * glm::pi<float>() / 12.0f;
-        m_skyParams.sunDirection = glm::normalize(glm::vec3(
-            std::cos(sunAngle),
-            std::sin(sunAngle),
-            -0.3f
-        ));
-    }
-
-    void SkyRenderer::Update(float deltaTime) {
-        // Œ·ÌÓ‚ÎˇÂÏ ‚ÂÏˇ ‡ÌËÏ‡ˆËË Ó·Î‡ÍÓ‚
-        m_cloudAnimationTime += deltaTime;
-
-        // ¿‚ÚÓÏ‡ÚË˜ÂÒÍ‡ˇ ‡ÌËÏ‡ˆËˇ ‚ÂÏÂÌË ‰Ìˇ
-        if (m_autoAnimate) {
-            m_timeOfDay += deltaTime * m_animationSpeed;
-            if (m_timeOfDay >= 24.0f) {
-                m_timeOfDay -= 24.0f;
-            }
-            UpdateSunPosition();
-        }
+        // Cleanup descriptor resources
+        if (m_descriptorPool) vkDestroyDescriptorPool(m_device->GetDevice(), m_descriptorPool, nullptr);
+        if (m_atmosphereDescSetLayout) vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_atmosphereDescSetLayout, nullptr);
+        if (m_cloudDescSetLayout) vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_cloudDescSetLayout, nullptr);
+        if (m_starsDescSetLayout) vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_starsDescSetLayout, nullptr);
+        if (m_postProcessDescSetLayout) vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_postProcessDescSetLayout, nullptr);
     }
 
     void SkyRenderer::Render(VkCommandBuffer cmd,
         VkImageView targetImageView,
+        VkImage targetImage,
         VkImageView depthImageView,
         VkExtent2D extent,
         const glm::mat4& projection,
         const glm::mat4& viewRotationOnly,
         const glm::vec3& cameraPos) {
-        // Õ‡ÒÚÓÈÍ‡ ÂÌ‰ÂËÌ„‡
-        VkRenderingAttachmentInfo colorAttachment{};
+
+        // Update render state
+        m_currentExtent = extent;
+        m_currentProjection = projection;
+        m_currentView = viewRotationOnly;
+        m_currentCameraPos = cameraPos;
+
+        VkImageMemoryBarrier resetBarriers[2] = {};
+        VkImageSubresourceRange subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+        // –°–±—Ä–æ—Å Sky Buffer
+        resetBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        resetBarriers[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        resetBarriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        resetBarriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        resetBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        resetBarriers[0].image = m_skyBuffer->GetHandle();
+        resetBarriers[0].subresourceRange = subresourceRange;
+        resetBarriers[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT; // –ó–∞–≤–µ—Ä—à–∏–ª–∏ —á—Ç–µ–Ω–∏–µ –≤ —à–µ–π–¥–µ—Ä–µ (–≤ –ø—Ä–æ—à–ª–æ–º –∫–∞–¥—Ä–µ)
+        resetBarriers[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; // –ù–∞—á–∏–Ω–∞–µ–º –∑–∞–ø–∏—Å—å (–≤ —ç—Ç–æ–º –∫–∞–¥—Ä–µ)
+
+        // –°–±—Ä–æ—Å Cloud Buffer
+        resetBarriers[1] = resetBarriers[0];
+        resetBarriers[1].image = m_cloudBuffer->GetHandle();
+
+        vkCmdPipelineBarrier(cmd,
+            // –ñ–¥–µ–º –∑–∞–≤–µ—Ä—à–µ–Ω–∏—è —á—Ç–µ–Ω–∏—è –≤ —Ñ—Ä–∞–≥–º–µ–Ω—Ç–Ω–æ–º —à–µ–π–¥–µ—Ä–µ (–ø—Ä–æ—à–ª–æ–≥–æ –∫–∞–¥—Ä–∞)
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            // –ü–µ—Ä–µ–¥ –Ω–∞—á–∞–ª–æ–º —ç—Ç–∞–ø–∞ –≤—ã–≤–æ–¥–∞ –≤ —Ü–≤–µ—Ç–æ–≤–æ–µ –≤–ª–æ–∂–µ–Ω–∏–µ (—ç—Ç–æ–≥–æ –∫–∞–¥—Ä–∞)
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, 0, nullptr, 0, nullptr, 2, resetBarriers);
+
+        // Update uniform buffers
+        UpdateUniformBuffers();
+
+        if (m_needsLUTGeneration || m_needsCloudGeneration || m_needsStarGeneration) {
+            VkCommandBuffer cmd = m_context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
+            if (m_needsLUTGeneration) { GenerateAtmosphereLUT(cmd); m_needsLUTGeneration = false; }
+             if (m_needsStarGeneration) { GenerateStarTexture(cmd); m_needsStarGeneration = false; }
+                        // –û–±–ª–∞–∫–∞ –≥–µ–Ω–µ—Ä–∏—Ä—É–µ–º –≤ –ø–æ—Å–ª–µ–¥–Ω—é—é –æ—á–µ—Ä–µ–¥—å (—Å–∞–º—ã–µ –º–µ–¥–ª–µ–Ω–Ω—ã–µ)
+                if (m_needsCloudGeneration) { GenerateCloudNoise(cmd); m_needsCloudGeneration = false; }
+             m_context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
+            
+               return; // –ü—Ä–æ–ø—É—Å–∫–∞–µ–º —Ä–µ–Ω–¥–µ—Ä–∏–Ω–≥ –≤ —ç—Ç–æ–º –∫–∞–¥—Ä–µ
+        }
+
+        // Begin timing
+        auto startTime = std::chrono::high_resolution_clock::now();
+
+        RenderAtmosphere(cmd);
+
+        auto atmosphereTime = std::chrono::high_resolution_clock::now();
+        m_stats.atmospherePassMs = std::chrono::duration<float, std::milli>(atmosphereTime - startTime).count();
+
+        // Render stars (only at night)
+        float dayNightBlend = glm::smoothstep(0.3f, 0.7f,
+            glm::dot(m_skyParams.sunDirection, glm::vec3(0, 1, 0)));
+        if (dayNightBlend < 0.9f) {
+            RenderStars(cmd);
+            RenderMoon(cmd);
+        }
+
+        auto starsTime = std::chrono::high_resolution_clock::now();
+        m_stats.starPassMs = std::chrono::duration<float, std::milli>(starsTime - atmosphereTime).count();
+
+        // Render volumetric clouds
+        if (m_skyParams.cloudCoverage > 0.01f) {
+            //RenderClouds(cmd);
+        }
+
+        auto cloudsTime = std::chrono::high_resolution_clock::now();
+        m_stats.cloudPassMs = std::chrono::duration<float, std::milli>(cloudsTime - starsTime).count();
+
+        // Post-processing and composite to target
+        PostProcess(cmd, targetImageView, targetImage);
+
+        auto endTime = std::chrono::high_resolution_clock::now();
+        m_stats.postProcessMs = std::chrono::duration<float, std::milli>(endTime - cloudsTime).count();
+        m_stats.totalMs = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+
+        // Update temporal accumulation state
+        m_previousViewProj = projection * viewRotationOnly;
+        m_frameIndex++;
+    }
+
+    void SkyRenderer::RenderAtmosphere(VkCommandBuffer cmd) {
+
+        // Clear sky buffer
+        VkClearValue clearValue = {};
+        clearValue.color = { {0.0f, 0.0f, 0.0f, 0.0f} };
+
+        // Render atmosphere pass
+        {
+            VkRenderingAttachmentInfo colorAttachment = {};
+            colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colorAttachment.imageView = m_skyBuffer->GetView();
+            colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAttachment.clearValue = clearValue;
+
+            VkRenderingInfo renderInfo = {};
+            renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            renderInfo.renderArea = { 0, 0, m_currentExtent.width, m_currentExtent.height };
+            renderInfo.layerCount = 1;
+            renderInfo.colorAttachmentCount = 1;
+            renderInfo.pColorAttachments = &colorAttachment;
+
+            vkCmdBeginRendering(cmd, &renderInfo);
+
+            // Bind atmosphere pipeline
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_atmospherePipeline->GetPipeline());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_atmospherePipeline->GetLayout(),
+                0, 1, &m_atmosphereDescSet, 0, nullptr);
+
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = (float)m_currentExtent.width;
+            viewport.height = (float)m_currentExtent.height;
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = { 0, 0 };
+            scissor.extent = m_currentExtent;
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            // Push constants for camera matrices
+            struct PushConstants {
+                glm::mat4 invViewProj;
+                glm::vec3 cameraPos;
+                float time;
+            } pushConstants;
+
+            pushConstants.invViewProj = glm::inverse(m_currentProjection * m_currentView);
+            pushConstants.cameraPos = m_currentCameraPos;
+            pushConstants.time = m_currentTime;
+
+            vkCmdPushConstants(cmd, m_atmospherePipeline->GetLayout(),
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(pushConstants), &pushConstants);
+
+            // Draw fullscreen quad
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+
+            vkCmdEndRendering(cmd);
+        }
+    }
+
+    void SkyRenderer::RenderClouds(VkCommandBuffer cmd) {
+        // Transition cloud buffer for rendering
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_cloudBuffer->GetHandle();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        // Setup rendering
+        VkRenderingAttachmentInfo colorAttachment = {};
         colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        colorAttachment.imageView = targetImageView;
+        colorAttachment.imageView = m_cloudBuffer->GetView();
+        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.clearValue.color = { {0.0f, 0.0f, 0.0f, 0.0f} };
+
+        VkRenderingInfo renderInfo = {};
+        renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderInfo.renderArea = { 0, 0, m_currentExtent.width, m_currentExtent.height };
+        renderInfo.layerCount = 1;
+        renderInfo.colorAttachmentCount = 1;
+        renderInfo.pColorAttachments = &colorAttachment;
+
+        vkCmdBeginRendering(cmd, &renderInfo);
+
+        // Bind cloud pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudPipeline->GetPipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_cloudPipeline->GetLayout(),
+            0, 1, &m_cloudDescSet, 0, nullptr);
+
+        // Cloud push constants
+        CloudPushConstants cloudPush{};
+
+        cloudPush.invViewProj = glm::inverse(m_currentProjection * m_currentView);
+        cloudPush.cameraPos = m_currentCameraPos;
+        cloudPush.time = m_cloudAnimationTime;
+        cloudPush.sunDirection = m_skyParams.sunDirection;
+        cloudPush.coverage = m_skyParams.cloudCoverage;
+        cloudPush.windDirection = glm::vec3(1, 0, 0.3f) * m_skyParams.cloudSpeed;
+        cloudPush.cloudScale = m_skyParams.cloudScale;
+
+        vkCmdPushConstants(cmd, m_cloudPipeline->GetLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(cloudPush), &cloudPush);
+
+        // Draw fullscreen quad
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        vkCmdEndRendering(cmd);
+    }
+
+    void SkyRenderer::RenderStars(VkCommandBuffer cmd) {
+        // Additive blending for stars over sky buffer
+        VkRenderingAttachmentInfo colorAttachment = {};
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.imageView = m_skyBuffer->GetView();
         colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
-        VkRenderingAttachmentInfo depthAttachment{};
-        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depthAttachment.imageView = depthImageView;
-        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo renderInfo = {};
+        renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderInfo.renderArea = { 0, 0, m_currentExtent.width, m_currentExtent.height };
+        renderInfo.layerCount = 1;
+        renderInfo.colorAttachmentCount = 1;
+        renderInfo.pColorAttachments = &colorAttachment;
 
-        VkRenderingInfo renderingInfo{};
-        renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        renderingInfo.renderArea.extent = extent;
-        renderingInfo.layerCount = 1;
-        renderingInfo.colorAttachmentCount = 1;
-        renderingInfo.pColorAttachments = &colorAttachment;
-        renderingInfo.pDepthAttachment = &depthAttachment;
+        vkCmdBeginRendering(cmd, &renderInfo);
 
-        vkCmdBeginRendering(cmd, &renderingInfo);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_starsPipeline->GetPipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_starsPipeline->GetLayout(),
+            0, 1, &m_starsDescSet, 0, nullptr);
 
-        // Viewport Ë scissor
+        StarsPushConstants starsPush{};
+
+        float dayNightBlend = glm::smoothstep(0.3f, 0.7f,
+            glm::dot(m_skyParams.sunDirection, glm::vec3(0, 1, 0)));
+
+        starsPush.invViewProj = glm::inverse(m_currentProjection * m_currentView);
+        starsPush.intensity = m_skyParams.starIntensity * (1.0f - dayNightBlend);
+        starsPush.twinkle = 0.3f;
+        starsPush.time = m_currentTime;
+        starsPush.nightBlend = 1.0f - dayNightBlend;
+
+        vkCmdPushConstants(cmd, m_starsPipeline->GetLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(starsPush), &starsPush);
+
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        vkCmdEndRendering(cmd);
+    }
+
+    void SkyRenderer::RenderMoon(VkCommandBuffer cmd) {
+
+    }
+
+    void SkyRenderer::PostProcess(VkCommandBuffer cmd, VkImageView targetView, VkImage targetImage) {
+
+        // –ù–∞–º –Ω—É–∂–Ω–æ 2 –±–∞—Ä—å–µ—Ä–∞: –¥–ª—è sky-–±—É—Ñ–µ—Ä–∞ –∏ –¥–ª—è cloud-–±—É—Ñ–µ—Ä–∞.
+        VkImageMemoryBarrier barriers[2] = {};
+
+        // –°–æ–∑–¥–∞–¥–∏–º –æ–¥–∏–Ω subresource range –¥–ª—è –≤—Å–µ—Ö –Ω–∞—à–∏—Ö —Ü–≤–µ—Ç–Ω—ã—Ö –∏–∑–æ–±—Ä–∞–∂–µ–Ω–∏–π
+        // (1 –º–∏–ø-—É—Ä–æ–≤–µ–Ω—å, 1 —Å–ª–æ–π –º–∞—Å—Å–∏–≤–∞).
+        VkImageSubresourceRange subresourceRange = {};
+        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        // –ë–∞—Ä—å–µ—Ä 0: Sky buffer –∫–∞–∫ input.
+        // –ü–µ—Ä–µ–≤–æ–¥–∏–º –µ–≥–æ –∏–∑ —Å–æ—Å—Ç–æ—è–Ω–∏—è "—Ü–µ–ª—å –¥–ª—è —Ä–µ–Ω–¥–µ—Ä–∞" –≤ —Å–æ—Å—Ç–æ—è–Ω–∏–µ "—Ç–µ–∫—Å—Ç—É—Ä–∞ –¥–ª—è —á—Ç–µ–Ω–∏—è".
+        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].image = m_skyBuffer->GetHandle();
+        barriers[0].subresourceRange = subresourceRange;
+        barriers[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; // –ó–∞–≤–µ—Ä—à–∏–ª–∏ –∑–∞–ø–∏—Å—å
+        barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;            // –ù–∞—á–∏–Ω–∞–µ–º —á—Ç–µ–Ω–∏–µ
+
+        // –ë–∞—Ä—å–µ—Ä 1: Cloud buffer –∫–∞–∫ input.
+        barriers[1] = barriers[0]; // –ö–æ–ø–∏—Ä—É–µ–º –Ω–∞—Å—Ç—Ä–æ–π–∫–∏
+        barriers[1].image = m_cloudBuffer->GetHandle();
+
+        // –í—ã–ø–æ–ª–Ω—è–µ–º –±–∞—Ä—å–µ—Ä –¥–ª—è –ø–æ–¥–≥–æ—Ç–æ–≤–∫–∏ –Ω–∞—à–∏—Ö 2-—Ö —Ç–µ–∫—Å—Ç—É—Ä –∫ —á—Ç–µ–Ω–∏—é
+        vkCmdPipelineBarrier(cmd,
+            // –ñ–¥–µ–º –∑–∞–≤–µ—Ä—à–µ–Ω–∏—è –∑–∞–ø–∏—Å–∏ –≤ —Ü–≤–µ—Ç–æ–≤–æ–µ –≤–ª–æ–∂–µ–Ω–∏–µ
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            // –ü–µ—Ä–µ–¥ —Ç–µ–º –∫–∞–∫ —Ñ—Ä–∞–≥–º–µ–Ω—Ç–Ω—ã–π —à–µ–π–¥–µ—Ä –Ω–∞—á–Ω–µ—Ç –∏–∑ –Ω–∏—Ö —á–∏—Ç–∞—Ç—å
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            2, barriers); // <<-- –£–ø—Ä–∞–≤–ª—è–µ–º —Ç–æ–ª—å–∫–æ 2 –±–∞—Ä—å–µ—Ä–∞–º–∏
+
+        VkRenderingAttachmentInfo colorAttachment = {};
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.imageView = targetView;
+        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo renderInfo = {};
+        renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderInfo.renderArea = { 0, 0, m_currentExtent.width, m_currentExtent.height };
+        renderInfo.layerCount = 1;
+        renderInfo.colorAttachmentCount = 1;
+        renderInfo.pColorAttachments = &colorAttachment;
+
+        vkCmdBeginRendering(cmd, &renderInfo);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_postProcessPipeline->GetPipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_postProcessPipeline->GetLayout(),
+            0, 1, &m_postProcessDescSet, 0, nullptr);
+
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
-        viewport.width = static_cast<float>(extent.width);
-        viewport.height = static_cast<float>(extent.height);
+        viewport.width = (float)m_currentExtent.width;
+        viewport.height = (float)m_currentExtent.height;
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
         vkCmdSetViewport(cmd, 0, 1, &viewport);
 
         VkRect2D scissor{};
-        scissor.extent = extent;
+        scissor.offset = { 0, 0 };
+        scissor.extent = m_currentExtent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // «‡ÔÓÎÌˇÂÏ ”Ã≈Õ‹ÿ≈ÕÕ€≈ push constants
-        SkyPushConstants pc{};
-        pc.invProjection = glm::inverse(projection);
-        pc.invView = glm::inverse(viewRotationOnly);
-        pc.cameraPosAndTime = glm::vec4(cameraPos, m_cloudAnimationTime);
-        pc.sunDirAndIntensity = glm::vec4(m_skyParams.sunDirection, m_skyParams.sunIntensity);
-        pc.skyParams1 = glm::vec4(m_timeOfDay, m_skyParams.cloudCoverage, m_skyParams.cloudSpeed, m_skyParams.cloudScale);
-        pc.skyParams2 = glm::vec4(m_skyParams.atmosphereDensity, m_skyParams.sunSize, m_skyParams.starIntensity, m_skyParams.horizonSharpness);
-        pc.resolution = glm::vec2(extent.width, extent.height);
+        PostProcessPushConstants postPush{};
 
-        vkCmdPushConstants(cmd, m_pipeline->GetLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(SkyPushConstants), &pc);
+        postPush.exposure = m_skyParams.exposure;
+        postPush.bloomThreshold = m_skyParams.bloomThreshold;
+        postPush.bloomIntensity = m_skyParams.bloomIntensity;
+        postPush.time = m_currentTime;
 
-        // œË‚ˇÁ˚‚‡ÂÏ descriptor set Ò uniform buffer
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_pipeline->GetLayout(), 0, 1, &m_descriptorSet, 0, nullptr);
+        vkCmdPushConstants(cmd, m_postProcessPipeline->GetLayout(),
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(postPush), &postPush);
 
-        // –ËÒÛÂÏ
-        if (m_pipeline) {
-            m_pipeline->Bind(cmd);
-            vkCmdDraw(cmd, 3, 1, 0, 0);
-        }
+        vkCmdDraw(cmd, 3, 1, 0, 0);
 
         vkCmdEndRendering(cmd);
     }
 
-    void SkyRenderer::ConfigureSky() {
-        SkyParams skyParams;
+    void SkyRenderer::Update(float deltaTime) {
+        if (m_autoAnimate) {
+            m_currentTime += deltaTime * m_animationSpeed;
 
-        // Õ‡ÒÚÓÈÍ‡ ‚ÂÏÂÌË ‰Ìˇ (Ì‡ÔËÏÂ, ÔÓÎ‰ÂÌ¸)
-        SetTimeOfDay(12.0f);
+            // Update time of day
+            float hoursPerSecond = 0.5f * m_animationSpeed;
+            SetTimeOfDay(fmod(m_skyParams.timeOfDay + deltaTime * hoursPerSecond, 24.0f));
+        }
 
-        // »ÎË ‚ÍÎ˛˜‡ÂÏ ‡‚ÚÓÏ‡ÚË˜ÂÒÍÛ˛ ‡ÌËÏ‡ˆË˛ ‚ÂÏÂÌË
-        // m_skyRenderer->SetAutoAnimate(true);
-        // m_skyRenderer->SetAnimationSpeed(0.5f); // 0.5 ˜‡Ò‡ ‚ ÒÂÍÛÌ‰Û
+        // Update cloud animation
+        m_cloudAnimationTime += deltaTime * m_skyParams.cloudSpeed;
 
-        // Õ‡ÒÚÓÈÍ‡ Ô‡‡ÏÂÚÓ‚ ÌÂ·‡
-        skyParams.sunIntensity = 3.0f;
-        skyParams.sunSize = 64.0f;
-
-        // ÷‚ÂÚ‡ ‰Ìˇ
-        skyParams.dayHorizonColor = glm::vec3(0.6f, 0.75f, 0.9f);
-        skyParams.dayZenithColor = glm::vec3(0.1f, 0.3f, 0.7f);
-
-        // ÷‚ÂÚ‡ Á‡Í‡Ú‡
-        skyParams.sunsetHorizonColor = glm::vec3(0.9f, 0.5f, 0.3f);
-        skyParams.sunsetZenithColor = glm::vec3(0.3f, 0.2f, 0.5f);
-
-        // ÷‚ÂÚ‡ ÌÓ˜Ë
-        skyParams.nightHorizonColor = glm::vec3(0.02f, 0.02f, 0.05f);
-        skyParams.nightZenithColor = glm::vec3(0.0f, 0.0f, 0.02f);
-
-        // Œ·Î‡Í‡
-        skyParams.cloudCoverage = 0.4f;     // 40% ÔÓÍ˚ÚËÂ Ó·Î‡Í‡ÏË
-        skyParams.cloudSpeed = 0.02f;       // —ÍÓÓÒÚ¸ ‰‚ËÊÂÌËˇ
-        skyParams.cloudScale = 3.0f;        // Ã‡Ò¯Ú‡·
-        skyParams.cloudHeight = 0.3f;       // ¬˚ÒÓÚ‡ ÒÎÓˇ Ó·Î‡ÍÓ‚
-
-        // ¿ÚÏÓÒÙÂ‡
-        skyParams.atmosphereDensity = 1.5f; // œÎÓÚÌÓÒÚ¸ ‡ÚÏÓÒÙÂ˚
-        skyParams.horizonSharpness = 3.0f;  // –ÂÁÍÓÒÚ¸ „ÓËÁÓÌÚ‡
-        skyParams.starIntensity = 0.5f;     // ﬂÍÓÒÚ¸ Á‚∏Á‰
-
-        SetSkyParams(skyParams);
+        // Update uniform buffers
+        UpdateUniformBuffers();
     }
 
-    void SkyRenderer::GenerateEnvironmentMaps(VkCommandBuffer cmd) {
-        // TODO: –Â‡ÎËÁ‡ˆËˇ „ÂÌÂ‡ˆËË IBL Í‡Ú
-        // 1. –ÂÌ‰ÂËÏ ÌÂ·Ó ‚ ÍÛ·Ï‡Ô
-        // 2. √ÂÌÂËÛÂÏ irradiance map (Ò‚∏ÚÍ‡ ‰Îˇ ‰ËÙÙÛÁÌÓ„Ó ÓÒ‚Â˘ÂÌËˇ)
-        // 3. √ÂÌÂËÛÂÏ prefilter map (Ò‚∏ÚÍ‡ ‰Îˇ ÁÂÍ‡Î¸ÌÓ„Ó ÓÒ‚Â˘ÂÌËˇ)
-        // 4. √ÂÌÂËÛÂÏ BRDF LUT
+    void SkyRenderer::SetTimeOfDay(float hours) {
+        m_skyParams.timeOfDay = fmod(hours, 24.0f);
+        UpdateSunMoonPositions();
+        UpdateAtmosphere();
     }
 
-    VkImageView SkyRenderer::GetIrradianceMap() const {
-        return m_irradianceMap ? m_irradianceMap->GetView() : VK_NULL_HANDLE;
+    void SkyRenderer::UpdateSunMoonPositions() {
+        // Simple sun position based on time of day
+        float sunAngle = (m_skyParams.timeOfDay / 24.0f) * 2.0f * std::numbers::pi - std::numbers::pi / 2.0f;
+
+        m_skyParams.sunDirection = glm::normalize(glm::vec3(
+            0.0f,
+            sin(sunAngle),
+            cos(sunAngle)
+        ));
+
+        // Adjust sun intensity based on position
+        float sunElevation = m_skyParams.sunDirection.y;
+        m_skyParams.sunIntensity = glm::max(0.0f, sunElevation) * 10.0f;
     }
 
-    VkImageView SkyRenderer::GetPrefilterMap() const {
-        return m_prefilterMap ? m_prefilterMap->GetView() : VK_NULL_HANDLE;
+    void SkyRenderer::UpdateAtmosphere() {
+        // Update atmospheric parameters based on time of day
+        float sunElevation = m_skyParams.sunDirection.y;
+
+        // Adjust turbidity for sunset/sunrise
+        if (abs(sunElevation) < 0.3f) {
+            m_skyParams.turbidity = glm::mix(2.0f, 5.0f, 1.0f - abs(sunElevation) / 0.3f);
+        }
+        else {
+            m_skyParams.turbidity = 2.0f;
+        }
+
+        // Adjust Mie coefficient for sun glare
+        m_skyParams.mieCoeff = glm::mix(1.0f, 2.0f, glm::max(0.0f, 1.0f - abs(sunElevation)));
     }
 
-    VkImageView SkyRenderer::GetBRDFLUT() const {
-        return m_brdfLUT ? m_brdfLUT->GetView() : VK_NULL_HANDLE;
+    void SkyRenderer::SetQualityProfile(SkyQualityProfile profile) {
+        m_qualityProfile = profile;
+        const auto& settings = g_qualityPresets[static_cast<int>(profile)];
+
+        // Recreate textures with new resolutions
+        //CreateTextures();
+        //CreateRenderTargets();
+
+        // Update cloud parameters
+        m_skyParams.cloudOctaves = settings.cloudOctaves;
+        m_useTemporalAccumulation = settings.temporalAccumulation;
+
+        //UpdateDescriptorSets(); // —Ç–æ–ª—å–∫–æ vkUpdateDescriptorSets, –±–µ–∑ –Ω–æ–≤–æ–≥–æ –ø—É–ª–∞
+
+        //// Regenerate procedural content
+        //VkCommandBuffer cmd = m_context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
+        //GenerateAtmosphereLUT(cmd);
+        //GenerateCloudNoise(cmd);
+        //GenerateStarTexture(cmd);
+        //m_context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
     }
 
     glm::vec3 SkyRenderer::GetCurrentSkyColor(const glm::vec3& direction) const {
-        return CalculateSkyColor(direction);
+        // Compute sky color for a given direction
+        glm::vec3 color = CalculateRayleighScattering(direction);
+        color += CalculateMieScattering(direction);
+
+        // Add stars if night
+        float dayNightBlend = glm::smoothstep(0.3f, 0.7f,
+            glm::dot(m_skyParams.sunDirection, glm::vec3(0, 1, 0)));
+        if (dayNightBlend < 0.9f) {
+            // Simple star contribution
+            float starNoise = glm::fract(sin(glm::dot(direction, glm::vec3(12.9898f, 78.233f, 45.164f))) * 43758.5453f);
+            if (starNoise > 0.99f) {
+                color += glm::vec3(1.0f) * m_skyParams.starIntensity * (1.0f - dayNightBlend);
+            }
+        }
+
+        return color;
     }
 
     glm::vec3 SkyRenderer::GetAmbientLight() const {
-        // ¬ÓÁ‚‡˘‡ÂÏ ÛÒÂ‰Ì∏ÌÌ˚È ˆ‚ÂÚ ÌÂ·‡ ‰Îˇ ‡Ï·ËÂÌÚÌÓ„Ó ÓÒ‚Â˘ÂÌËˇ
-        glm::vec3 upColor = CalculateSkyColor(glm::vec3(0, 1, 0));
-        glm::vec3 horizonColor = CalculateSkyColor(glm::vec3(1, 0, 0));
-        return glm::mix(horizonColor, upColor, 0.5f) * 0.3f;
+        // Compute ambient light from sky
+        glm::vec3 ambient = glm::vec3(0.0f);
+
+        // Sample sky in multiple directions
+        const int samples = 16;
+        for (int i = 0; i < samples; ++i) {
+            float theta = (float(i) / float(samples)) * 2.0f * std::numbers::pi;
+            for (int j = 0; j < samples / 2; ++j) {
+                float phi = (float(j) / float(samples / 2)) * std::numbers::pi;
+
+                glm::vec3 dir(
+                    sin(phi) * cos(theta),
+                    cos(phi),
+                    sin(phi) * sin(theta)
+                );
+
+                ambient += GetCurrentSkyColor(dir);
+            }
+        }
+
+        ambient /= float(samples * samples / 2);
+        return ambient * m_skyParams.ambientLightMultiplier;
     }
 
-    glm::vec3 SkyRenderer::CalculateSkyColor(const glm::vec3& rayDir) const {
-        float y = rayDir.y * 0.5f + 0.5f;
-
-        // »ÌÚÂÔÓÎˇˆËˇ ˆ‚ÂÚÓ‚ ‚ Á‡‚ËÒËÏÓÒÚË ÓÚ ‚ÂÏÂÌË
-        float dayFactor = glm::smoothstep(6.0f, 9.0f, m_timeOfDay) *
-            glm::smoothstep(21.0f, 18.0f, m_timeOfDay);
-        float sunsetFactor = glm::max(
-            glm::smoothstep(5.0f, 7.0f, m_timeOfDay) * glm::smoothstep(9.0f, 7.0f, m_timeOfDay),
-            glm::smoothstep(17.0f, 19.0f, m_timeOfDay) * glm::smoothstep(21.0f, 19.0f, m_timeOfDay)
+    glm::vec3 SkyRenderer::CalculateRayleighScattering(const glm::vec3& rayDir) const {
+        return AtmosphereHelper::ComputeRayleighScattering(
+            glm::vec3(0, EARTH_RADIUS + 1000.0f, 0),  // Camera at 1km altitude
+            rayDir,
+            ATMOSPHERE_HEIGHT,
+            m_skyParams.sunDirection,
+            m_skyParams.rayleighBeta * m_skyParams.rayleighCoeff,
+            16
         );
-        float nightFactor = 1.0f - glm::max(dayFactor, sunsetFactor);
-
-        glm::vec3 horizonColor = m_skyParams.dayHorizonColor * dayFactor +
-            m_skyParams.sunsetHorizonColor * sunsetFactor +
-            m_skyParams.nightHorizonColor * nightFactor;
-        glm::vec3 zenithColor = m_skyParams.dayZenithColor * dayFactor +
-            m_skyParams.sunsetZenithColor * sunsetFactor +
-            m_skyParams.nightZenithColor * nightFactor;
-
-        glm::vec3 skyColor;
-        if (rayDir.y > 0.0f) {
-            skyColor = glm::mix(horizonColor, zenithColor, glm::pow(y, m_skyParams.atmosphereDensity));
-        }
-        else {
-            skyColor = glm::mix(horizonColor, m_skyParams.groundColor, glm::pow(-rayDir.y, 2.0f));
-        }
-
-        // —ÓÎÌˆÂ
-        float sun = glm::pow(glm::max(glm::dot(rayDir, m_skyParams.sunDirection), 0.0f), m_skyParams.sunSize);
-        skyColor += m_skyParams.sunColor * sun * m_skyParams.sunIntensity * glm::max(dayFactor, sunsetFactor * 0.7f);
-
-        return skyColor;
     }
 
-    void SkyRenderer::RecreateSwapchainResources() {
-        // 1. ∆‰ÂÏ ÓÍÓÌ˜‡ÌËˇ ‡·ÓÚ˚ GPU
-        vkDeviceWaitIdle(m_device->GetDevice());
-
-        // 2. —·‡Ò˚‚‡ÂÏ allocator (ÓÒ‚Ó·ÓÊ‰‡ÂÏ ÒÚ‡˚Â descriptor sets)
-        m_device->GetDescriptorAllocator()->ResetPools(); 
-
-        // 3. —ÓÁ‰‡ÂÏ descriptor set Á‡ÌÓ‚Ó
-        CreateDescriptorSet();
+    glm::vec3 SkyRenderer::CalculateMieScattering(const glm::vec3& rayDir) const {
+        return AtmosphereHelper::ComputeMieScattering(
+            glm::vec3(0, EARTH_RADIUS + 1000.0f, 0),
+            rayDir,
+            ATMOSPHERE_HEIGHT,
+            m_skyParams.sunDirection,
+            m_skyParams.mieBeta * m_skyParams.mieCoeff,
+            m_skyParams.mieG,
+            8
+        );
     }
 
+    // AtmosphereHelper implementation
+    glm::vec3 AtmosphereHelper::ComputeRayleighScattering(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDir,
+        float rayLength,
+        const glm::vec3& sunDir,
+        const glm::vec3& rayleighBeta,
+        int numSamples) {
 
+        float stepSize = rayLength / float(numSamples);
+        glm::vec3 scatter = glm::vec3(0.0f);
+        float opticalDepth = 0.0f;
+
+        for (int i = 0; i < numSamples; ++i) {
+            float t = (float(i) + 0.5f) * stepSize;
+            glm::vec3 samplePos = rayOrigin + rayDir * t;
+
+            float height = glm::length(samplePos) - EARTH_RADIUS;
+            float density = exp(-height / 8000.0f); // Scale height of 8km
+
+            opticalDepth += density * stepSize;
+
+            // Compute sun optical depth
+            float sunOpticalDepth = ComputeOpticalDepth(
+                samplePos, sunDir, ATMOSPHERE_HEIGHT,
+                EARTH_RADIUS, ATMOSPHERE_RADIUS, 8
+            );
+
+            glm::vec3 transmission = exp(-(rayleighBeta * (opticalDepth + sunOpticalDepth)));
+            scatter += transmission * density * stepSize;
+        }
+
+        // Rayleigh phase function
+        float cosTheta = glm::dot(rayDir, sunDir);
+        float phase = 3.0f / (16.0f * std::numbers::pi) * (1.0f + cosTheta * cosTheta);
+
+        return scatter * rayleighBeta * phase * 20.0f; // Intensity scale
+    }
+
+    glm::vec3 AtmosphereHelper::ComputeMieScattering(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDir,
+        float rayLength,
+        const glm::vec3& sunDir,
+        const glm::vec3& mieBeta,
+        float g,
+        int numSamples) {
+
+        float stepSize = rayLength / float(numSamples);
+        glm::vec3 scatter = glm::vec3(0.0f);
+        float opticalDepth = 0.0f;
+
+        for (int i = 0; i < numSamples; ++i) {
+            float t = (float(i) + 0.5f) * stepSize;
+            glm::vec3 samplePos = rayOrigin + rayDir * t;
+
+            float height = glm::length(samplePos) - EARTH_RADIUS;
+            float density = exp(-height / 1200.0f); // Scale height of 1.2km for Mie
+
+            opticalDepth += density * stepSize;
+
+            float sunOpticalDepth = ComputeOpticalDepth(
+                samplePos, sunDir, ATMOSPHERE_HEIGHT,
+                EARTH_RADIUS, ATMOSPHERE_RADIUS, 8
+            );
+
+            glm::vec3 transmission = exp(-(mieBeta * (opticalDepth + sunOpticalDepth)));
+            scatter += transmission * density * stepSize;
+        }
+
+        // Henyey-Greenstein phase function
+        float cosTheta = glm::dot(rayDir, sunDir);
+        float phase = (1.0f - g * g) / (4.0f * std::numbers::pi * pow(1.0f + g * g - 2.0f * g * cosTheta, 1.5f));
+
+        return scatter * mieBeta * phase * 20.0f;
+    }
+
+    float AtmosphereHelper::ComputeOpticalDepth(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDir,
+        float rayLength,
+        float planetRadius,
+        float atmosphereRadius,
+        int numSamples) {
+
+        float stepSize = rayLength / float(numSamples);
+        float opticalDepth = 0.0f;
+
+        for (int i = 0; i < numSamples; ++i) {
+            float t = (float(i) + 0.5f) * stepSize;
+            glm::vec3 samplePos = rayOrigin + rayDir * t;
+
+            float height = glm::length(samplePos) - planetRadius;
+            float density = exp(-height / 8000.0f);
+
+            opticalDepth += density * stepSize;
+        }
+
+        return opticalDepth;
+    }
+
+    void SkyRenderer::CreateUniformBuffers() {
+        m_atmosphereUBO = CreateUniformBuffer<AtmosphereUBO>(m_device);
+        m_cloudUBO = CreateUniformBuffer<CloudUBO>(m_device);
+        m_starUBO = CreateUniformBuffer<StarUBO>(m_device);
+    }
+
+    void SkyRenderer::CreateTextures() {
+        const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+
+        // --- Star texture (2D) ---
+        m_starTexture = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            settings.starResolution,
+            settings.starResolution,
+            1, // depthOrArrayLayers
+            1,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_starTexture->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, m_context);
+
+        // --- Cloud noise texture (3D) ---
+        m_cloudNoiseTexture = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            settings.cloudResolution,              // width
+            settings.cloudResolution,              // height
+            settings.cloudResolution / 4,          // depth
+            1,                                     // arrayLayers (–≤—Å–µ–≥–¥–∞ 1 –¥–ª—è 3D)
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_3D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_cloudNoiseTexture->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, m_context);
+
+        // --- Cloud detail noise (3D) ---
+        m_cloudDetailNoise = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            settings.cloudResolution / 2,
+            settings.cloudResolution / 2,
+            settings.cloudResolution / 8,
+            1,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_3D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_cloudDetailNoise->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, m_context);
+
+        // --- Milky Way texture (2D) ---
+        m_milkyWayTexture = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            2048, 1024,
+            1,
+            1,
+            VK_FORMAT_R8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+
+        m_milkyWayTexture->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_context);
+
+        // --- Moon texture (2D) ---
+        m_moonTexture = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            512, 512,
+            1,
+            1,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+
+        m_moonTexture->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_context);
+    }
+
+    void SkyRenderer::CreateLUTs() {
+        // Transmittance LUT
+        m_transmittanceLUT = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            256, 64, 1,1,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_transmittanceLUT->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, m_context);
+
+        // Multi-scattering LUT
+        m_multiScatteringLUT = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            32, 32, 1, 1,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_multiScatteringLUT->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, m_context);
+
+        //// BRDF LUT
+        //m_brdfLUT = std::make_unique<RHI::Vulkan::Image>(
+        //    m_device,
+        //    512, 512, 1, 1,
+        //    VK_FORMAT_R16G16_SFLOAT,
+        //    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        //    VK_IMAGE_TYPE_2D,
+        //    VK_IMAGE_TILING_OPTIMAL,
+        //    VK_IMAGE_LAYOUT_UNDEFINED,
+        //    VK_SAMPLE_COUNT_1_BIT,
+        //    VK_IMAGE_ASPECT_COLOR_BIT,
+        //    VMA_MEMORY_USAGE_GPU_ONLY,
+        //    VK_SHARING_MODE_EXCLUSIVE
+        //);
+        //m_brdfLUT->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_context);
+    }
+
+    void SkyRenderer::CreateRenderTargets() {
+        const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+
+        // Sky buffer
+        m_skyBuffer = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            settings.skyResolution, settings.skyResolution, 1, 1,
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_skyBuffer->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, m_context);
+
+        // Cloud buffer
+        m_cloudBuffer = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            settings.cloudResolution * 2, settings.cloudResolution * 2, 1, 1,
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE
+        );
+        m_cloudBuffer->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, m_context);
+
+        // Bloom buffer (5 mip levels)
+        m_bloomBuffer = std::make_unique<RHI::Vulkan::Image>(
+            m_device,
+            settings.skyResolution / 2, settings.skyResolution / 2, 1, 1,
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VMA_MEMORY_USAGE_GPU_ONLY,
+            VK_SHARING_MODE_EXCLUSIVE,
+            5 // mipLevels
+        );
+        m_bloomBuffer->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_context);
+
+        // History buffer
+        if (settings.temporalAccumulation) {
+            m_historyBuffer = std::make_unique<RHI::Vulkan::Image>(
+                m_device,
+                settings.skyResolution, settings.skyResolution, 1, 1,
+                VK_FORMAT_R16G16B16A16_SFLOAT,
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_IMAGE_TYPE_2D,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_SAMPLE_COUNT_1_BIT,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VMA_MEMORY_USAGE_GPU_ONLY,
+                VK_SHARING_MODE_EXCLUSIVE
+            );
+            m_historyBuffer->TransitionLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_context);
+        }
+    }
+
+    void SkyRenderer::CreateSamplers() {
+        // Linear sampler
+        m_linearSamplerObj = std::make_unique<RHI::Vulkan::Sampler>(
+            m_device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            true, 16.0f
+        );
+        m_linearSampler = m_linearSamplerObj->GetHandle();
+
+        // Nearest sampler
+        m_nearestSamplerObj = std::make_unique<RHI::Vulkan::Sampler>(
+            m_device, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            false, 1.0f
+        );
+        m_nearestSampler = m_nearestSamplerObj->GetHandle();
+
+        // Cloud sampler (wrap mode)
+        m_cloudSamplerObj = std::make_unique<RHI::Vulkan::Sampler>(
+            m_device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            true, 8.0f
+        );
+        m_cloudSampler = m_cloudSamplerObj->GetHandle();
+    }
+
+    void SkyRenderer::UpdateUniformBuffers() {
+        // Update atmosphere UBO
+        struct AtmosphereUBO {
+            glm::vec3 sunDirection;
+            float sunIntensity;
+            glm::vec3 rayleighBeta;
+            float turbidity;
+            glm::vec3 mieBeta;
+            float mieG;
+            glm::vec3 groundColor;
+            float planetRadius;
+            glm::vec3 sunColor;
+            float atmosphereRadius;
+        } atmosphereData;
+
+        atmosphereData.sunDirection = m_skyParams.sunDirection;
+        atmosphereData.sunIntensity = m_skyParams.sunIntensity;
+        atmosphereData.rayleighBeta = m_skyParams.rayleighBeta * m_skyParams.rayleighCoeff;
+        atmosphereData.turbidity = m_skyParams.turbidity;
+        atmosphereData.mieBeta = m_skyParams.mieBeta * m_skyParams.mieCoeff;
+        atmosphereData.mieG = m_skyParams.mieG;
+        atmosphereData.groundColor = m_skyParams.groundColor;
+        atmosphereData.planetRadius = EARTH_RADIUS;
+        atmosphereData.sunColor = glm::vec3(1.0f, 0.98f, 0.9f);
+        atmosphereData.atmosphereRadius = ATMOSPHERE_RADIUS;
+
+        m_atmosphereUBO->Upload(&atmosphereData, sizeof(atmosphereData));
+
+        // Update cloud UBO
+        struct CloudUBO {
+            float cloudAltitude;
+            float cloudThickness;
+            float cloudDensity;
+            float cloudAbsorption;
+            glm::vec3 cloudColor;
+            float cloudLacunarity;
+            glm::vec3 cloudScatterColor;
+            float cloudGain;
+            int cloudOctaves;
+            float cloudAnimSpeed;
+            float cloudDetailScale;
+            float cloudDetailStrength;
+        } cloudData;
+
+        cloudData.cloudAltitude = m_skyParams.cloudAltitude;
+        cloudData.cloudThickness = m_skyParams.cloudThickness;
+        cloudData.cloudDensity = m_skyParams.cloudDensity;
+        cloudData.cloudAbsorption = 0.5f;
+        cloudData.cloudColor = glm::vec3(1.0f);
+        cloudData.cloudLacunarity = m_skyParams.cloudLacunarity;
+        cloudData.cloudScatterColor = glm::vec3(0.8f, 0.9f, 1.0f);
+        cloudData.cloudGain = m_skyParams.cloudGain;
+        cloudData.cloudOctaves = m_skyParams.cloudOctaves;
+        cloudData.cloudAnimSpeed = m_skyParams.cloudSpeed;
+        cloudData.cloudDetailScale = 2.0f;
+        cloudData.cloudDetailStrength = 0.3f;
+
+        m_cloudUBO->Upload(&cloudData, sizeof(cloudData));
+    }
+
+    void SkyRenderer::GenerateAtmosphereLUT(VkCommandBuffer cmd) {
+        // Bind compute pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_atmosphereLUTPipeline->GetPipeline());
+
+        // Bind descriptor set with LUT images
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_atmosphereLUTPipeline->GetLayout(),
+            0, 1, &m_atmosphereLUTDescSet, 0, nullptr);
+
+        // Dispatch compute threads
+        uint32_t groupCountX = (256 + 7) / 8;
+        uint32_t groupCountY = (64 + 7) / 8;
+        vkCmdDispatch(cmd, groupCountX, groupCountY, 1);
+
+        // Barrier to ensure LUT is ready
+        VkMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &barrier, 0, nullptr, 0, nullptr);
+    }
+
+    void SkyRenderer::GenerateCloudNoise(VkCommandBuffer cmd) {
+        const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+
+        // Bind compute pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_cloudNoisePipeline->GetPipeline());
+
+        // Bind descriptor set
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_cloudNoisePipeline->GetLayout(),
+            0, 1, &m_cloudNoiseDescSet, 0, nullptr);
+
+        // –û–±–Ω–æ–≤–ª—è–µ–º push constants
+        CloudNoisePushConstants pushConstants{};
+        pushConstants.octaves = settings.cloudOctaves;    // –ò–ª–∏ –≤–∞—à–∏ –∑–Ω–∞—á–µ–Ω–∏—è
+        pushConstants.lacunarity = 2.0f;
+        pushConstants.gain = 0.5f;
+        pushConstants.scale = settings.cloudResolution;      // –ù–∞–ø—Ä–∏–º–µ—Ä, –∏–∑ –Ω–∞—Å—Ç—Ä–æ–µ–∫ –∫–∞—á–µ—Å—Ç–≤–∞
+
+        vkCmdPushConstants(
+            cmd,
+            m_cloudNoisePipeline->GetLayout(),
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            sizeof(CloudNoisePushConstants),
+            &pushConstants
+        );
+
+        // Dispatch for 3D texture
+        uint32_t groupCountX = (settings.cloudResolution + 7) / 8;
+        uint32_t groupCountY = (settings.cloudResolution + 7) / 8;
+        uint32_t groupCountZ = (settings.cloudResolution / 4 + 7) / 8;
+        vkCmdDispatch(cmd, groupCountX, groupCountY, groupCountZ);
+
+        // Transition to shader read
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_cloudNoiseTexture->GetHandle();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        // Same for detail noise
+        barrier.image = m_cloudDetailNoise->GetHandle();
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    void SkyRenderer::GenerateStarTexture(VkCommandBuffer cmd) {
+        const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+
+        // Generate procedural star field
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_starGeneratorPipeline->GetPipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_starGeneratorPipeline->GetLayout(), 
+            0, 1, &m_starGeneratorDescSet, 0, nullptr);
+
+        uint32_t groupCount = (settings.starResolution + 7) / 8;
+        vkCmdDispatch(cmd, groupCount, groupCount, 1);
+
+        // Transition to shader read
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_starTexture->GetHandle();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    void SkyRenderer::GenerateEnvironmentMaps(VkCommandBuffer cmd) {
+        // This would generate IBL maps from the current sky
+        // Implementation would involve:
+        // 1. Render sky to cubemap
+        // 2. Generate irradiance map via convolution
+        // 3. Generate prefiltered environment map for different roughness levels
+        // 4. Update BRDF LUT if needed
+
+        // For now, we'll use the analytical sky directly for IBL
+        // This is a placeholder for full IBL generation
+    }
+
+    void SkyRenderer::CreateAtmospherePipeline() {
+        const std::string programName = "Atmosphere";
+
+        // --- –ü—Ä–æ–≤–µ—Ä–∫–∞ —á—Ç–æ –ø—Ä–æ–≥—Ä–∞–º–º–∞ –¥–µ–π—Å—Ç–≤–∏—Ç–µ–ª—å–Ω–æ –∑–∞—Ä–µ–≥–∏—Å—Ç—Ä–∏—Ä–æ–≤–∞–Ω–∞ ---
+        if (!m_shaderManager->GetProgram(programName)) {
+            throw std::runtime_error("Shader program '" + programName + "' not found. "
+                "Make sure MeadowApp::LoadShaders() was called before creating pipelines.");
+        }
+
+        // --- Descriptor layout (–∫–∞–∫ —É —Ç–µ–±—è —Ä–∞–Ω—å—à–µ) ---
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &binding;
+
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_atmosphereDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create atmosphere descriptor set layout");
+        }
+
+        // --- Push constants ---
+        VkPushConstantRange pushConstant{};
+        pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushConstant.offset = 0;
+        pushConstant.size = sizeof(glm::mat4) + sizeof(glm::vec3) + sizeof(float);
+
+        // --- –ü–æ–¥–≥–æ—Ç–æ–≤–∫–∞ CreateInfo —á–µ—Ä–µ–∑ —Ö–µ–ª–ø–µ—Ä ---
+        auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(
+            programName,
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            &m_atmosphereDescSetLayout,
+            1,
+            false, // blending off
+            VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
+            VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD
+        );
+
+        info.depthFormat = m_depthFormat;
+        info.depthTestEnable = false;
+        info.depthWriteEnable = false;
+        info.cullMode = VK_CULL_MODE_NONE;
+        info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        info.pushConstants.push_back(pushConstant);
+
+        // –°–æ—Ö—Ä–∞–Ω–∏–º info, —á—Ç–æ–±—ã –º–æ–∂–Ω–æ –±—ã–ª–æ –ø–µ—Ä–µ—Å–æ–∑–¥–∞—Ç—å –ø–æ–∑–∂–µ –ø—Ä–∏ —Ö–æ—Ç-—Ä–µ–ª–æ–∞–¥–µ
+        m_atmospherePipelineCreateInfo = info; // <-- –¥–æ–±–∞–≤—å –ø–æ–ª–µ –≤ SkyRenderer: ReloadablePipeline::CreateInfo m_atmospherePipelineCreateInfo;
+
+        // --- –°–æ–∑–¥–∞—ë–º ReloadablePipeline ---
+        m_atmospherePipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
+        if (!m_atmospherePipeline->Create(info)) {
+            throw std::runtime_error("Failed to create atmosphere pipeline");
+        }
+    }
+
+    void SkyRenderer::CreateCloudPipeline() {
+        // --- Descriptor set layout ---
+        std::vector<VkDescriptorSetLayoutBinding> bindings(3);
+
+        // UBO
+        bindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+        // Cloud noise texture
+        bindings[1] = { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+        // Cloud detail texture
+        bindings[2] = { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_cloudDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create cloud descriptor set layout");
+        }
+
+        // –û–ø—Ä–µ–¥–µ–ª—è–µ–º push constant –¥–ª—è –æ–±–ª–∞–∫–æ–≤
+        VkPushConstantRange cloudPushRange{};
+        cloudPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        cloudPushRange.offset = 0;
+        cloudPushRange.size = sizeof(CloudPushConstants);
+
+        // --- Pipeline info ---
+        auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(
+            "Clouds",                // –∏–º—è –ø—Ä–æ–≥—Ä–∞–º–º—ã –∏–∑ LoadShaders
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            &m_cloudDescSetLayout,
+            1,
+            true, // –≤–∫–ª—é—á–∞–µ–º blending
+            VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+            VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD
+        );
+
+        info.pushConstants.push_back(cloudPushRange);
+
+        info.depthFormat = m_depthFormat;
+        info.depthTestEnable = false;
+        info.depthWriteEnable = false;
+        info.cullMode = VK_CULL_MODE_NONE;
+        info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        m_cloudPipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
+        if (!m_cloudPipeline->Create(info)) {
+            throw std::runtime_error("Failed to create cloud pipeline");
+        }
+    }
+
+    void SkyRenderer::CreateStarsPipeline() {
+        // Descriptor layout for stars
+        std::vector<VkDescriptorSetLayoutBinding> bindings(3); // –£–≤–µ–ª–∏—á—å—Ç–µ —Ä–∞–∑–º–µ—Ä
+
+        // Uniform buffer
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        // Star texture
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        // Milky Way texture
+        bindings[2].binding = 2;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_starsDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create stars descriptor set layout");
+        }
+
+        // --- Push constants –¥–ª—è –∑–≤—ë–∑–¥ (–µ—Å–ª–∏ –Ω—É–∂–Ω—ã) ---
+        VkPushConstantRange starsPushRange{};
+        starsPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // –∏–ª–∏ vertex + fragment
+        starsPushRange.offset = 0;
+        starsPushRange.size = sizeof(StarsPushConstants); // —Å—Ç—Ä—É–∫—Ç—É—Ä–∞ push-constants –¥–ª—è –∑–≤—ë–∑–¥
+
+        // --- Pipeline info ---
+        auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(
+            "Stars",
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            &m_starsDescSetLayout,
+            1,       // 1 –¥–µ—Å–∫—Ä–∏–ø—Ç–æ—Ä–Ω—ã–π —Å–µ—Ç
+            true,    // –≤–∫–ª—é—á–∞–µ–º blending
+            VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
+            VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD
+        );
+
+        info.pushConstants.push_back(starsPushRange);
+
+        info.depthFormat = m_depthFormat;
+        info.depthTestEnable = false;
+        info.depthWriteEnable = false;
+        info.cullMode = VK_CULL_MODE_NONE;
+        info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // --- –°–æ–∑–¥–∞—ë–º –ø–∞–π–ø–ª–∞–π–Ω ---
+        m_starsPipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
+        if (!m_starsPipeline->Create(info)) {
+            throw std::runtime_error("Failed to create stars pipeline");
+        }
+    }
+
+    void SkyRenderer::CreatePostProcessPipeline() {
+        std::vector<VkDescriptorSetLayoutBinding> bindings(3);
+
+        bindings[0] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr }; // Sky buffer
+        bindings[1] = { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr }; // Cloud buffer
+        bindings[2] = { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr }; // Bloom buffer
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_postProcessDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create post-process descriptor set layout");
+        }
+
+        VkPushConstantRange postprocessPushRange{};
+        postprocessPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // –∏–ª–∏ vertex + fragment
+        postprocessPushRange.offset = 0;
+        postprocessPushRange.size = sizeof(PostProcessPushConstants); // —Å—Ç—Ä—É–∫—Ç—É—Ä–∞ push-constants –¥–ª—è –∑–≤—ë–∑–¥
+
+        auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(
+            "PostProcess",
+            m_colorFormat,
+            &m_postProcessDescSetLayout,
+            1,
+            false // –±–µ–∑ blending
+        );
+
+        info.pushConstants.push_back(postprocessPushRange);
+
+        info.depthFormat = m_depthFormat;
+        info.depthTestEnable = false;
+        info.depthWriteEnable = false;
+        info.cullMode = VK_CULL_MODE_NONE;
+        info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        m_postProcessPipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
+        if (!m_postProcessPipeline->Create(info)) {
+            throw std::runtime_error("Failed to create post-process pipeline");
+        }
+    }
+
+    void SkyRenderer::CreateComputePipelines() {
+        // Create atmosphere LUT generation pipeline
+        CreateAtmosphereLUTPipeline();
+
+        // Create cloud noise generation pipeline
+        CreateCloudNoisePipeline();
+
+        // Create star texture generation pipeline
+        CreateStarGeneratorPipeline();
+    }
+
+    void SkyRenderer::CreateAtmosphereLUTPipeline() {
+        RHI::Vulkan::ComputePipelineCreateInfo info{};
+        info.shaderProgramName = "GenerateLUT"; // –ò–º—è –ø—Ä–æ–≥—Ä–∞–º–º—ã –≤ ShaderManager
+
+        // Descriptor set layout
+        std::vector<VkDescriptorSetLayoutBinding> bindings(3);
+        bindings[0] = { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+        bindings[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+        bindings[2] = { 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+
+      
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_atmosphereLUTDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create LUT descriptor set layout");
+        }
+        info.descriptorSetLayout = m_atmosphereLUTDescSetLayout;
+
+        // Push constants –æ—Ç—Å—É—Ç—Å—Ç–≤—É—é—Ç
+        info.pushConstants.clear();
+
+        m_atmosphereLUTPipeline = std::make_unique<RHI::Vulkan::ComputePipeline>(m_device, m_shaderManager);
+        if (!m_atmosphereLUTPipeline->Create(info)) {
+            throw std::runtime_error("Failed to create atmosphere LUT compute pipeline");
+        }
+    }
+
+    void SkyRenderer::CreateCloudNoisePipeline() {
+        RHI::Vulkan::ComputePipelineCreateInfo info{};
+        info.shaderProgramName = "CloudNoise";
+
+        std::vector<VkDescriptorSetLayoutBinding> bindings(2);
+        bindings[0] = { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+        bindings[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_cloudNoiseDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create cloud noise descriptor set layout");
+        }
+        info.descriptorSetLayout = m_cloudNoiseDescSetLayout;
+
+        // –î–æ–±–∞–≤–ª—è–µ–º push constants
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pushRange.offset = 0;
+        pushRange.size = sizeof(CloudNoisePushConstants); // –û–ø—Ä–µ–¥–µ–ª–∏—Ç–µ —ç—Ç—É —Å—Ç—Ä—É–∫—Ç—É—Ä—É
+
+        info.pushConstants.push_back(pushRange);
+
+        m_cloudNoisePipeline = std::make_unique<RHI::Vulkan::ComputePipeline>(m_device, m_shaderManager);
+        if (!m_cloudNoisePipeline->Create(info)) {
+            throw std::runtime_error("Failed to create cloud noise compute pipeline");
+        }
+    }
+
+    void SkyRenderer::CreateStarGeneratorPipeline() {
+        RHI::Vulkan::ComputePipelineCreateInfo info{};
+        info.shaderProgramName = "GenerateStars";
+
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &binding;
+
+        if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr, &m_starGeneratorDescSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create star descriptor set layout");
+        }
+        info.descriptorSetLayout = m_starGeneratorDescSetLayout;
+
+        // Push constant –¥–ª—è seed
+        VkPushConstantRange pushConstant{};
+        pushConstant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pushConstant.offset = 0;
+        pushConstant.size = sizeof(uint32_t);
+        info.pushConstants.push_back(pushConstant);
+
+        m_starGeneratorPipeline = std::make_unique<RHI::Vulkan::ComputePipeline>(m_device, m_shaderManager);
+        if (!m_starGeneratorPipeline->Create(info)) {
+            throw std::runtime_error("Failed to create star generator compute pipeline");
+        }
+    }
+
+    void SkyRenderer::CreateDescriptorSets() {
+        // Create descriptor pool
+        std::vector<VkDescriptorPoolSize> poolSizes = {
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 20},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 20}
+        };
+
+        VkDescriptorPoolCreateInfo poolInfo = {};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data();
+        poolInfo.maxSets = 10;
+
+        if (vkCreateDescriptorPool(m_device->GetDevice(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create descriptor pool");
+        }
+
+        // Allocate atmosphere descriptor set
+        VkDescriptorSetAllocateInfo allocInfo = {};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_atmosphereDescSetLayout;
+
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_atmosphereDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate atmosphere descriptor set");
+        }
+
+        // Update atmosphere descriptor set
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.buffer = m_atmosphereUBO->GetBuffer();
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(AtmosphereUBO);
+
+        VkWriteDescriptorSet descriptorWrite = {};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = m_atmosphereDescSet;
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(), 1, &descriptorWrite, 0, nullptr);
+
+        // Allocate and update cloud descriptor set
+        if (m_cloudDescSetLayout == VK_NULL_HANDLE) {
+            throw std::runtime_error("Atmosphere descriptor set layout is VK_NULL_HANDLE - pipeline creation failed");
+        }
+
+        allocInfo.pSetLayouts = &m_cloudDescSetLayout;
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_cloudDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate cloud descriptor set");
+        }
+
+        // Allocate star generator descriptor set
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_starGeneratorDescSetLayout;
+
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_starGeneratorDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate star generator descriptor set");
+        }
+
+        // Update star generator descriptor set
+        VkDescriptorImageInfo starGenImageInfo = {};
+        starGenImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        starGenImageInfo.imageView = m_starTexture->GetView();
+        starGenImageInfo.sampler = VK_NULL_HANDLE;
+
+        VkWriteDescriptorSet starGenWrite = {};
+        starGenWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        starGenWrite.dstSet = m_starGeneratorDescSet;
+        starGenWrite.dstBinding = 0;
+        starGenWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        starGenWrite.descriptorCount = 1;
+        starGenWrite.pImageInfo = &starGenImageInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(), 1, &starGenWrite, 0, nullptr);
+
+        // Allocate cloud noise descriptor set
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptorPool;  // –ò—Å–ø–æ–ª—å–∑—É–µ–º —Ç–æ—Ç –∂–µ –ø—É–ª
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_cloudNoiseDescSetLayout;
+
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_cloudNoiseDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate cloud noise descriptor set");
+        }
+
+        std::vector<VkWriteDescriptorSet> noiseWrites(2);
+
+        // Binding 0: Cloud noise texture
+        VkDescriptorImageInfo noiseImageInfo = {};
+        noiseImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        noiseImageInfo.imageView = m_cloudNoiseTexture->GetView();
+        noiseImageInfo.sampler = VK_NULL_HANDLE;
+
+        noiseWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        noiseWrites[0].dstSet = m_cloudNoiseDescSet;
+        noiseWrites[0].dstBinding = 0;
+        noiseWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        noiseWrites[0].descriptorCount = 1;
+        noiseWrites[0].pImageInfo = &noiseImageInfo;
+
+        // Binding 1: Cloud detail noise
+        VkDescriptorImageInfo detailImageInfo = {};
+        detailImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        detailImageInfo.imageView = m_cloudDetailNoise->GetView();
+        detailImageInfo.sampler = VK_NULL_HANDLE;
+
+        noiseWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        noiseWrites[1].dstSet = m_cloudNoiseDescSet;
+        noiseWrites[1].dstBinding = 1;
+        noiseWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        noiseWrites[1].descriptorCount = 1;
+        noiseWrites[1].pImageInfo = &detailImageInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(),
+            static_cast<uint32_t>(noiseWrites.size()),
+            noiseWrites.data(), 0, nullptr);
+
+        // Allocate atmosphere LUT descriptor set
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_atmosphereLUTDescSetLayout;
+
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_atmosphereLUTDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate atmosphere LUT descriptor set");
+        }
+
+        // Update atmosphere LUT descriptor set
+        std::vector<VkWriteDescriptorSet> lutWrites(3);
+
+        // Binding 0: Storage Image (–Ω–∞–ø—Ä–∏–º–µ—Ä, transmission LUT)
+        VkDescriptorImageInfo transmissionImageInfo = {};
+        transmissionImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        transmissionImageInfo.imageView = m_transmittanceLUT->GetView(); // –∑–∞–º–µ–Ω–∏—Ç–µ –Ω–∞ –≤–∞—à–µ –∏–∑–æ–±—Ä–∞–∂–µ–Ω–∏–µ
+        transmissionImageInfo.sampler = VK_NULL_HANDLE;
+
+        lutWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        lutWrites[0].dstSet = m_atmosphereLUTDescSet;
+        lutWrites[0].dstBinding = 0;
+        lutWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        lutWrites[0].descriptorCount = 1;
+        lutWrites[0].pImageInfo = &transmissionImageInfo;
+
+        // Binding 1: Storage Image (–Ω–∞–ø—Ä–∏–º–µ—Ä, scattering LUT)
+        VkDescriptorImageInfo scatteringImageInfo = {};
+        scatteringImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        scatteringImageInfo.imageView = m_multiScatteringLUT->GetView(); // –∑–∞–º–µ–Ω–∏—Ç–µ –Ω–∞ –≤–∞—à–µ –∏–∑–æ–±—Ä–∞–∂–µ–Ω–∏–µ
+        scatteringImageInfo.sampler = VK_NULL_HANDLE;
+
+        lutWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        lutWrites[1].dstSet = m_atmosphereLUTDescSet;
+        lutWrites[1].dstBinding = 1;
+        lutWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        lutWrites[1].descriptorCount = 1;
+        lutWrites[1].pImageInfo = &scatteringImageInfo;
+
+        // Binding 2: Uniform Buffer
+        VkDescriptorBufferInfo lutBufferInfo = {};
+        lutBufferInfo.buffer = m_atmosphereUBO->GetBuffer(); // –º–æ–∂–µ—Ç–µ –ø–µ—Ä–µ–∏—Å–ø–æ–ª—å–∑–æ–≤–∞—Ç—å —Ç–æ—Ç –∂–µ UBO
+        lutBufferInfo.offset = 0;
+        lutBufferInfo.range = sizeof(AtmosphereUBO);
+
+        lutWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        lutWrites[2].dstSet = m_atmosphereLUTDescSet;
+        lutWrites[2].dstBinding = 2;
+        lutWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        lutWrites[2].descriptorCount = 1;
+        lutWrites[2].pBufferInfo = &lutBufferInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(),
+            static_cast<uint32_t>(lutWrites.size()),
+            lutWrites.data(), 0, nullptr);
+
+        std::vector<VkWriteDescriptorSet> cloudWrites(3);
+
+        // Cloud UBO
+        VkDescriptorBufferInfo cloudBufferInfo = {};
+        cloudBufferInfo.buffer = m_cloudUBO->GetBuffer(); 
+        cloudBufferInfo.offset = 0;
+        cloudBufferInfo.range = sizeof(CloudUBO);
+
+        cloudWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        cloudWrites[0].dstSet = m_cloudDescSet;
+        cloudWrites[0].dstBinding = 0;
+        cloudWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        cloudWrites[0].descriptorCount = 1;
+        cloudWrites[0].pBufferInfo = &cloudBufferInfo;
+
+        // Cloud noise texture
+        noiseImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        noiseImageInfo.imageView = m_cloudNoiseTexture->GetView();
+        noiseImageInfo.sampler = m_cloudSampler;
+
+        cloudWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        cloudWrites[1].dstSet = m_cloudDescSet;
+        cloudWrites[1].dstBinding = 1;
+        cloudWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        cloudWrites[1].descriptorCount = 1;
+        cloudWrites[1].pImageInfo = &noiseImageInfo;
+
+        // Cloud detail texture
+        detailImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        detailImageInfo.imageView = m_cloudDetailNoise->GetView();
+        detailImageInfo.sampler = m_cloudSampler;
+
+        cloudWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        cloudWrites[2].dstSet = m_cloudDescSet;
+        cloudWrites[2].dstBinding = 2;
+        cloudWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        cloudWrites[2].descriptorCount = 1;
+        cloudWrites[2].pImageInfo = &detailImageInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(),
+            static_cast<uint32_t>(cloudWrites.size()),
+            cloudWrites.data(), 0, nullptr);
+
+        // Allocate and update stars descriptor set
+        allocInfo.pSetLayouts = &m_starsDescSetLayout;
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_starsDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate stars descriptor set");
+        }
+
+        std::vector<VkWriteDescriptorSet> starWrites(3);
+
+        // Stars uniform buffer
+        VkDescriptorBufferInfo starsBufferInfo = {};
+        starsBufferInfo.buffer = m_starUBO->GetBuffer();  
+        starsBufferInfo.offset = 0;
+        starsBufferInfo.range = sizeof(StarUBO);
+
+        // Star texture
+        starWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        starWrites[0].dstSet = m_starsDescSet;
+        starWrites[0].dstBinding = 0;
+        starWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        starWrites[0].descriptorCount = 1;
+        starWrites[0].pBufferInfo = &starsBufferInfo;
+
+        // Star texture (—Ç–µ–ø–µ—Ä—å binding = 1)
+        VkDescriptorImageInfo starImageInfo = {};
+        starImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        starImageInfo.imageView = m_starTexture->GetView();
+        starImageInfo.sampler = m_nearestSampler;
+
+        starWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        starWrites[1].dstSet = m_starsDescSet;
+        starWrites[1].dstBinding = 1;  // –ò–∑–º–µ–Ω–µ–Ω–æ –Ω–∞ binding = 1
+        starWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        starWrites[1].descriptorCount = 1;
+        starWrites[1].pImageInfo = &starImageInfo;
+
+        // Milky Way texture (—Ç–µ–ø–µ—Ä—å binding = 2)
+        VkDescriptorImageInfo milkyWayImageInfo = {};
+        milkyWayImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        milkyWayImageInfo.imageView = m_milkyWayTexture->GetView();
+        milkyWayImageInfo.sampler = m_linearSampler;
+
+        starWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        starWrites[2].dstSet = m_starsDescSet;
+        starWrites[2].dstBinding = 2;  // –ò–∑–º–µ–Ω–µ–Ω–æ –Ω–∞ binding = 2
+        starWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        starWrites[2].descriptorCount = 1;
+        starWrites[2].pImageInfo = &milkyWayImageInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(),
+            static_cast<uint32_t>(starWrites.size()),
+            starWrites.data(), 0, nullptr);
+
+        // Allocate and update post-process descriptor set
+        allocInfo.pSetLayouts = &m_postProcessDescSetLayout;
+        if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_postProcessDescSet) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate post-process descriptor set");
+        }
+
+        std::vector<VkWriteDescriptorSet> postWrites(3);
+
+        // Sky buffer
+        VkDescriptorImageInfo skyImageInfo = {};
+        skyImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        skyImageInfo.imageView = m_skyBuffer->GetView();
+        skyImageInfo.sampler = m_linearSampler;
+
+        postWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        postWrites[0].dstSet = m_postProcessDescSet;
+        postWrites[0].dstBinding = 0;
+        postWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        postWrites[0].descriptorCount = 1;
+        postWrites[0].pImageInfo = &skyImageInfo;
+
+        // Cloud buffer
+        VkDescriptorImageInfo cloudImageInfo = {};
+        cloudImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        cloudImageInfo.imageView = m_cloudBuffer->GetView();
+        cloudImageInfo.sampler = m_linearSampler;
+
+        postWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        postWrites[1].dstSet = m_postProcessDescSet;
+        postWrites[1].dstBinding = 1;
+        postWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        postWrites[1].descriptorCount = 1;
+        postWrites[1].pImageInfo = &cloudImageInfo;
+
+        // Bloom buffer
+        VkDescriptorImageInfo bloomImageInfo = {};
+        bloomImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        bloomImageInfo.imageView = m_bloomBuffer->GetView();
+        bloomImageInfo.sampler = m_linearSampler;
+
+        postWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        postWrites[2].dstSet = m_postProcessDescSet;
+        postWrites[2].dstBinding = 2;
+        postWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        postWrites[2].descriptorCount = 1;
+        postWrites[2].pImageInfo = &bloomImageInfo;
+
+        vkUpdateDescriptorSets(m_device->GetDevice(),
+            static_cast<uint32_t>(postWrites.size()),
+            postWrites.data(), 0, nullptr);
+    }
+
+    void SkyRenderer::UpdateDescriptorSets() {
+        // Atmosphere descriptor set
+        {
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = m_atmosphereUBO->GetBuffer();
+            bufferInfo.offset = 0;
+            bufferInfo.range = sizeof(AtmosphereUBO);
+
+            VkWriteDescriptorSet descriptorWrite{};
+            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrite.dstSet = m_atmosphereDescSet;
+            descriptorWrite.dstBinding = 0;
+            descriptorWrite.dstArrayElement = 0;
+            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrite.descriptorCount = 1;
+            descriptorWrite.pBufferInfo = &bufferInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), 1, &descriptorWrite, 0, nullptr);
+        }
+
+        // Star generator descriptor set
+        {
+            VkDescriptorImageInfo starGenImageInfo{};
+            starGenImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            starGenImageInfo.imageView = m_starTexture->GetView();
+            starGenImageInfo.sampler = VK_NULL_HANDLE;
+
+            VkWriteDescriptorSet starGenWrite{};
+            starGenWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            starGenWrite.dstSet = m_starGeneratorDescSet;
+            starGenWrite.dstBinding = 0;
+            starGenWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            starGenWrite.descriptorCount = 1;
+            starGenWrite.pImageInfo = &starGenImageInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), 1, &starGenWrite, 0, nullptr);
+        }
+
+        // Cloud noise descriptor set
+        {
+            std::vector<VkWriteDescriptorSet> noiseWrites(2);
+
+            VkDescriptorImageInfo noiseImageInfo{};
+            noiseImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            noiseImageInfo.imageView = m_cloudNoiseTexture->GetView();
+            noiseImageInfo.sampler = VK_NULL_HANDLE;
+
+            noiseWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            noiseWrites[0].dstSet = m_cloudNoiseDescSet;
+            noiseWrites[0].dstBinding = 0;
+            noiseWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            noiseWrites[0].descriptorCount = 1;
+            noiseWrites[0].pImageInfo = &noiseImageInfo;
+
+            VkDescriptorImageInfo detailImageInfo{};
+            detailImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            detailImageInfo.imageView = m_cloudDetailNoise->GetView();
+            detailImageInfo.sampler = VK_NULL_HANDLE;
+
+            noiseWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            noiseWrites[1].dstSet = m_cloudNoiseDescSet;
+            noiseWrites[1].dstBinding = 1;
+            noiseWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            noiseWrites[1].descriptorCount = 1;
+            noiseWrites[1].pImageInfo = &detailImageInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), static_cast<uint32_t>(noiseWrites.size()), noiseWrites.data(), 0, nullptr);
+        }
+
+        // Atmosphere LUT descriptor set
+        {
+            std::vector<VkWriteDescriptorSet> lutWrites(3);
+
+            VkDescriptorImageInfo transmissionImageInfo{};
+            transmissionImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            transmissionImageInfo.imageView = m_transmittanceLUT->GetView();
+            transmissionImageInfo.sampler = VK_NULL_HANDLE;
+
+            lutWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            lutWrites[0].dstSet = m_atmosphereLUTDescSet;
+            lutWrites[0].dstBinding = 0;
+            lutWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            lutWrites[0].descriptorCount = 1;
+            lutWrites[0].pImageInfo = &transmissionImageInfo;
+
+            VkDescriptorImageInfo scatteringImageInfo{};
+            scatteringImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            scatteringImageInfo.imageView = m_multiScatteringLUT->GetView();
+            scatteringImageInfo.sampler = VK_NULL_HANDLE;
+
+            lutWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            lutWrites[1].dstSet = m_atmosphereLUTDescSet;
+            lutWrites[1].dstBinding = 1;
+            lutWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            lutWrites[1].descriptorCount = 1;
+            lutWrites[1].pImageInfo = &scatteringImageInfo;
+
+            VkDescriptorBufferInfo lutBufferInfo{};
+            lutBufferInfo.buffer = m_atmosphereUBO->GetBuffer();
+            lutBufferInfo.offset = 0;
+            lutBufferInfo.range = sizeof(AtmosphereUBO);
+
+            lutWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            lutWrites[2].dstSet = m_atmosphereLUTDescSet;
+            lutWrites[2].dstBinding = 2;
+            lutWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            lutWrites[2].descriptorCount = 1;
+            lutWrites[2].pBufferInfo = &lutBufferInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), static_cast<uint32_t>(lutWrites.size()), lutWrites.data(), 0, nullptr);
+        }
+
+        // Cloud descriptor set
+        {
+            std::vector<VkWriteDescriptorSet> cloudWrites(3);
+
+            VkDescriptorBufferInfo cloudBufferInfo{};
+            cloudBufferInfo.buffer = m_cloudUBO->GetBuffer();
+            cloudBufferInfo.offset = 0;
+            cloudBufferInfo.range = sizeof(CloudUBO);
+
+            cloudWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            cloudWrites[0].dstSet = m_cloudDescSet;
+            cloudWrites[0].dstBinding = 0;
+            cloudWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            cloudWrites[0].descriptorCount = 1;
+            cloudWrites[0].pBufferInfo = &cloudBufferInfo;
+
+            VkDescriptorImageInfo noiseImageInfo{};
+            noiseImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            noiseImageInfo.imageView = m_cloudNoiseTexture->GetView();
+            noiseImageInfo.sampler = m_cloudSampler;
+
+            cloudWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            cloudWrites[1].dstSet = m_cloudDescSet;
+            cloudWrites[1].dstBinding = 1;
+            cloudWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            cloudWrites[1].descriptorCount = 1;
+            cloudWrites[1].pImageInfo = &noiseImageInfo;
+
+            VkDescriptorImageInfo detailImageInfo{};
+            detailImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            detailImageInfo.imageView = m_cloudDetailNoise->GetView();
+            detailImageInfo.sampler = m_cloudSampler;
+
+            cloudWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            cloudWrites[2].dstSet = m_cloudDescSet;
+            cloudWrites[2].dstBinding = 2;
+            cloudWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            cloudWrites[2].descriptorCount = 1;
+            cloudWrites[2].pImageInfo = &detailImageInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), static_cast<uint32_t>(cloudWrites.size()), cloudWrites.data(), 0, nullptr);
+        }
+
+        // Stars descriptor set
+        {
+            std::vector<VkWriteDescriptorSet> starWrites(3);
+
+            VkDescriptorBufferInfo starsBufferInfo{};
+            starsBufferInfo.buffer = m_starUBO->GetBuffer();
+            starsBufferInfo.offset = 0;
+            starsBufferInfo.range = sizeof(StarUBO);
+
+            starWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            starWrites[0].dstSet = m_starsDescSet;
+            starWrites[0].dstBinding = 0;
+            starWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            starWrites[0].descriptorCount = 1;
+            starWrites[0].pBufferInfo = &starsBufferInfo;
+
+            VkDescriptorImageInfo starImageInfo{};
+            starImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            starImageInfo.imageView = m_starTexture->GetView();
+            starImageInfo.sampler = m_nearestSampler;
+
+            starWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            starWrites[1].dstSet = m_starsDescSet;
+            starWrites[1].dstBinding = 1;
+            starWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            starWrites[1].descriptorCount = 1;
+            starWrites[1].pImageInfo = &starImageInfo;
+
+            VkDescriptorImageInfo milkyWayImageInfo{};
+            milkyWayImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            milkyWayImageInfo.imageView = m_milkyWayTexture->GetView();
+            milkyWayImageInfo.sampler = m_linearSampler;
+
+            starWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            starWrites[2].dstSet = m_starsDescSet;
+            starWrites[2].dstBinding = 2;
+            starWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            starWrites[2].descriptorCount = 1;
+            starWrites[2].pImageInfo = &milkyWayImageInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), static_cast<uint32_t>(starWrites.size()), starWrites.data(), 0, nullptr);
+        }
+
+        // Post-process descriptor set
+        {
+            std::vector<VkWriteDescriptorSet> postWrites(3);
+
+            VkDescriptorImageInfo skyImageInfo{};
+            skyImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            skyImageInfo.imageView = m_skyBuffer->GetView();
+            skyImageInfo.sampler = m_linearSampler;
+
+            postWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            postWrites[0].dstSet = m_postProcessDescSet;
+            postWrites[0].dstBinding = 0;
+            postWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            postWrites[0].descriptorCount = 1;
+            postWrites[0].pImageInfo = &skyImageInfo;
+
+            VkDescriptorImageInfo cloudImageInfo{};
+            cloudImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            cloudImageInfo.imageView = m_cloudBuffer->GetView();
+            cloudImageInfo.sampler = m_linearSampler;
+
+            postWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            postWrites[1].dstSet = m_postProcessDescSet;
+            postWrites[1].dstBinding = 1;
+            postWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            postWrites[1].descriptorCount = 1;
+            postWrites[1].pImageInfo = &cloudImageInfo;
+
+            VkDescriptorImageInfo bloomImageInfo{};
+            bloomImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            bloomImageInfo.imageView = m_bloomBuffer->GetView();
+            bloomImageInfo.sampler = m_linearSampler;
+
+            postWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            postWrites[2].dstSet = m_postProcessDescSet;
+            postWrites[2].dstBinding = 2;
+            postWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            postWrites[2].descriptorCount = 1;
+            postWrites[2].pImageInfo = &bloomImageInfo;
+
+            vkUpdateDescriptorSets(m_device->GetDevice(), static_cast<uint32_t>(postWrites.size()), postWrites.data(), 0, nullptr);
+        }
+    }
+
+    void SkyRenderer::TransitionImageToLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout newLayout) {
+       
+        VkImageMemoryBarrier2 barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // –ø—Ä–æ—Å—Ç–æ –≥–∞—Ä–∞–Ω—Ç–∏—Ä—É–µ–º –∫–æ—Ä—Ä–µ–∫—Ç–Ω—ã–π –ø–µ—Ä–µ—Ö–æ–¥
+        barrier.newLayout = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+
+        VkDependencyInfo depInfo{};
+        depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        depInfo.imageMemoryBarrierCount = 1;
+        depInfo.pImageMemoryBarriers = &barrier;
+
+        vkCmdPipelineBarrier2(cmd, &depInfo);
+    }
+
+    void SkyRenderer::TransitionAllStorageImagesToGeneral(VkCommandBuffer cmd) {
+        TransitionImageToLayout(cmd, m_cloudNoiseTexture->GetHandle(), VK_IMAGE_LAYOUT_GENERAL);
+        TransitionImageToLayout(cmd, m_cloudDetailNoise->GetHandle(), VK_IMAGE_LAYOUT_GENERAL);
+        TransitionImageToLayout(cmd, m_starTexture->GetHandle(), VK_IMAGE_LAYOUT_GENERAL);
+        TransitionImageToLayout(cmd, m_transmittanceLUT->GetHandle(), VK_IMAGE_LAYOUT_GENERAL);
+        // –¥–æ–±–∞–≤—å –æ—Å—Ç–∞–ª—å–Ω—ã–µ storage images –ø–æ –∞–Ω–∞–ª–æ–≥–∏–∏
+    }
 } // namespace Renderer

@@ -36,7 +36,12 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height, bool f
     if (!m_window) {
         throw std::runtime_error("Failed to create GLFW window");
     }
-    
+
+    // Center window if not fullscreen
+    if (!fullscreen) {
+        CenterWindow(m_window);
+    }
+
     // Set user pointer for callbacks
     glfwSetWindowUserPointer(m_window, this);
     
@@ -144,5 +149,27 @@ void Window::OnFramebufferResize(GLFWwindow* window, int width, int height) {
         self->m_resizeCallback(width, height);
     }
 }
+
+void Window::CenterWindow(GLFWwindow* window) {
+    if (!window) return;
+
+    // ѕолучаем монитор, на котором окно в данный момент
+    int wx, wy, ww, wh;
+    glfwGetWindowPos(window, &wx, &wy);
+    glfwGetWindowSize(window, &ww, &wh);
+
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor(); // ћожно сделать проверку через glfwGetWindowMonitor дл€ более точного
+    if (!monitor) return;
+
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    if (!mode) return;
+
+    // ¬ычисл€ем центр
+    int xpos = (mode->width - ww) / 2;
+    int ypos = (mode->height - wh) / 2;
+
+    glfwSetWindowPos(window, xpos, ypos);
+}
+
 
 } // namespace Core

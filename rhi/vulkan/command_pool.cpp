@@ -13,7 +13,7 @@ namespace {
 }
 
 CommandPool::CommandPool(Device* device, uint32_t queueFamily, VkCommandPoolCreateFlags flags)
-    : m_device(device) {
+    : m_device(device), m_queueFamilyIndex(queueFamily) {
     
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -21,6 +21,8 @@ CommandPool::CommandPool(Device* device, uint32_t queueFamily, VkCommandPoolCrea
     poolInfo.queueFamilyIndex = queueFamily;
     
     VK_CHECK(vkCreateCommandPool(m_device->GetDevice(), &poolInfo, nullptr, &m_pool));
+
+    std::cout << "[CommandPool] Created pool for queue family " << queueFamily << std::endl;
 }
 
 CommandPool::~CommandPool() {
@@ -79,6 +81,18 @@ CommandPoolManager::CommandPoolManager(Device* device) : m_device(device) {
     m_transferPool = std::make_unique<CommandPool>(
         device, 
         device->GetTransferQueueFamily(),
+        VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+    );
+
+    m_graphicsPool = std::make_unique<CommandPool>(
+        device,
+        device->GetGraphicsQueueFamily(),
+        VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+    );
+
+    m_computePool = std::make_unique<CommandPool>(
+        device,
+        device->GetComputeQueueFamily(),
         VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
     );
 }
@@ -161,5 +175,83 @@ void CommandPoolManager::EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
     vkDestroyFence(m_device->GetDevice(), fence, nullptr);
     m_transferPool->FreeCommandBuffer(commandBuffer);
 }
+
+VkCommandBuffer CommandPoolManager::BeginSingleTimeCommandsGraphics() {
+    VkCommandBuffer cmd = m_graphicsPool->AllocateCommandBuffer();
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    return cmd;
+}
+
+void CommandPoolManager::EndSingleTimeCommandsGraphics(VkCommandBuffer cmd) {
+    VK_CHECK(vkEndCommandBuffer(cmd));
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence;
+    VK_CHECK(vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence));
+
+    // ВАЖНО: отправляем именно в graphics queue
+    VK_CHECK(vkQueueSubmit(m_device->GetGraphicsQueue(), 1, &submitInfo, fence));
+    VK_CHECK(vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX));
+
+    vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+    m_graphicsPool->FreeCommandBuffer(cmd);
+}
+
+VkCommandBuffer CommandPoolManager::BeginSingleTimeCommandsCompute() {
+    VkCommandBuffer cmd = m_computePool->AllocateCommandBuffer();
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    return cmd;
+}
+
+void CommandPoolManager::EndSingleTimeCommandsCompute(VkCommandBuffer cmd) {
+    VK_CHECK(vkEndCommandBuffer(cmd));
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence;
+    VK_CHECK(vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence));
+
+    std::cout << "[Compute] Submitting command buffer from pool family "
+        << m_computePool->GetQueueFamilyIndex()
+        << " to compute queue family "
+        << m_device->GetComputeQueueFamily()
+        << std::endl;
+
+    VkResult res = vkQueueSubmit(m_device->GetComputeQueue(), 1, &submitInfo, fence);
+
+    if (res != VK_SUCCESS) {
+        vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+        throw std::runtime_error("Vulkan error: vkQueueSubmit failed");
+    }
+
+    VkResult waitRes = vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+    std::cout << "vkWaitForFences result: " << waitRes << std::endl;
+
+    vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+    m_computePool->FreeCommandBuffer(cmd);
+}
+
+
 
 } // namespace RHI::Vulkan

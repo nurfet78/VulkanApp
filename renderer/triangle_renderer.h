@@ -5,21 +5,21 @@
 
 
 namespace RHI::Vulkan {
+	class Device;
+	class ShaderManager;
+	class ReloadablePipeline;
+} 
 
-class Device;
-class ShaderManager;
-class ReloadablePipeline;
+namespace Renderer {
+    class TriangleRenderer {
+    public:
+        TriangleRenderer(RHI::Vulkan::Device* device, RHI::Vulkan::ShaderManager* shaderManager, VkFormat colorFormat);
+        ~TriangleRenderer() = default;
 
-class TriangleRenderer {
-public:
-    TriangleRenderer(Device* device, ShaderManager* shaderManager, VkFormat colorFormat);
-    ~TriangleRenderer() = default;
-    
-    void Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent);
-    
-private:
-    Device* m_device;
-    std::unique_ptr<ReloadablePipeline> m_pipeline;
-};
+        void Render(VkCommandBuffer cmd, VkImageView targetImageView, VkExtent2D extent);
 
-} // namespace RHI::Vulkan
+    private:
+        RHI::Vulkan::Device* m_device;
+        std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_pipeline;
+    };
+}

@@ -42,6 +42,8 @@ private:
     static void OnWindowClose(GLFWwindow* window);
     static void OnWindowResize(GLFWwindow* window, int width, int height);
     static void OnFramebufferResize(GLFWwindow* window, int width, int height);
+	
+	void CenterWindow(GLFWwindow* window);
     
     GLFWwindow* m_window = nullptr;
     std::string m_title;

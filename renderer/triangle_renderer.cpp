@@ -2,13 +2,14 @@
 #include "rhi/vulkan/device.h"
 #include "rhi/vulkan/shader_manager.h"
 
-namespace RHI::Vulkan {
+namespace Renderer {
 
 
-    TriangleRenderer::TriangleRenderer(Device* device, ShaderManager* shaderManager, VkFormat colorFormat) : m_device(device) {
+    TriangleRenderer::TriangleRenderer(RHI::Vulkan::Device* device, RHI::Vulkan::ShaderManager* shaderManager, VkFormat colorFormat) 
+        : m_device(device) {
 
     // 1. Описываем конфигурацию нашего пайплайна
-    ReloadablePipeline::CreateInfo pipelineInfo{};
+        RHI::Vulkan::ReloadablePipeline::CreateInfo pipelineInfo{};
 
     // Указываем имя шейдерной программы, которую мы загрузили в MeadowApp::LoadShaders()
     pipelineInfo.shaderProgram = "Triangle";
@@ -26,7 +27,7 @@ namespace RHI::Vulkan {
     pipelineInfo.vertexAttributes = {};
 
     // 2. Создаем ReloadablePipeline
-    m_pipeline = std::make_unique<ReloadablePipeline>(m_device, shaderManager);
+    m_pipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, shaderManager);
     if (!m_pipeline->Create(pipelineInfo)) {
         throw std::runtime_error("Failed to create triangle pipeline!");
     }

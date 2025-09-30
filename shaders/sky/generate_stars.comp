@@ -1,0 +1,27 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba32f) uniform writeonly image2D starsImage;
+
+layout(push_constant) uniform PushConstants {
+    uint seed;
+} pc;
+
+// Простая hash-функция для генерации псевдослучайного числа
+float rand(uvec2 co, uint seed) {
+    uint x = co.x * 73856093u ^ co.y * 19349663u ^ seed;
+    x = (x << 13u) ^ x;
+    return float((x * (x * x * 15731u + 789221u) + 1376312589u) & 0x7fffffffu) / float(0x7fffffffu);
+}
+
+void main() {
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    vec4 color = vec4(0.0);
+
+    float r = rand(uvec2(id), pc.seed);
+    if (r > 0.995) { // вероятность появления звезды
+        color = vec4(1.0); // белая звезда
+    }
+
+    imageStore(starsImage, id, color);
+}

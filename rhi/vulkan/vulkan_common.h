@@ -4,8 +4,8 @@
 #include "pch.h"
 
 #define VK_CHECK(x) do { \
-    VkResult result = x; \
-    if (result != VK_SUCCESS) { \
+    VkResult vk_result = x; \
+    if (vk_result != VK_SUCCESS) { \
         throw std::runtime_error(std::string("Vulkan error: ") + #x); \
     } \
 } while(0)

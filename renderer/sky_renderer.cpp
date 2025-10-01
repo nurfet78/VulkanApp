@@ -9,13 +9,6 @@
 
 namespace Renderer {
 
-    // Constants for atmosphere simulation
-    constexpr float EARTH_RADIUS = 6371000.0f;        // Earth radius in meters
-    constexpr float ATMOSPHERE_RADIUS = 6471000.0f;   // Atmosphere outer radius
-    constexpr float ATMOSPHERE_HEIGHT = 100000.0f;    // 100km atmosphere height
-    constexpr float SUN_ANGULAR_RADIUS = 0.00465f;    // Sun's angular radius
-    constexpr float MOON_ANGULAR_RADIUS = 0.00257f;   // Moon's angular radius
-
     // Quality presets
     struct QualitySettings {
         uint32_t skyResolution;
@@ -76,11 +69,11 @@ namespace Renderer {
         m_needsStarGeneration = true;
 
         // Generate initial procedural content
-       /* VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute(); 
-        GenerateAtmosphereLUT(cmd);
-        GenerateCloudNoise(cmd);
-        GenerateStarTexture(cmd);
-        context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);*/
+		VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
+		GenerateAtmosphereLUT(cmd);
+		GenerateCloudNoise(cmd);
+		GenerateStarTexture(cmd);
+		context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
     }
 
     SkyRenderer::~SkyRenderer() {
@@ -104,7 +97,6 @@ namespace Renderer {
     void SkyRenderer::Render(VkCommandBuffer cmd,
         VkImageView targetImageView,
         VkImage targetImage,
-        VkImageView depthImageView,
         VkExtent2D extent,
         const glm::mat4& projection,
         const glm::mat4& viewRotationOnly,
@@ -144,16 +136,16 @@ namespace Renderer {
         // Update uniform buffers
         UpdateUniformBuffers();
 
-        if (m_needsLUTGeneration || m_needsCloudGeneration || m_needsStarGeneration) {
-            VkCommandBuffer cmd = m_context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
-            if (m_needsLUTGeneration) { GenerateAtmosphereLUT(cmd); m_needsLUTGeneration = false; }
-             if (m_needsStarGeneration) { GenerateStarTexture(cmd); m_needsStarGeneration = false; }
-                        // Облака генерируем в последнюю очередь (самые медленные)
-                if (m_needsCloudGeneration) { GenerateCloudNoise(cmd); m_needsCloudGeneration = false; }
-             m_context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
-            
-               return; // Пропускаем рендеринг в этом кадре
-        }
+        //if (m_needsLUTGeneration || m_needsCloudGeneration || m_needsStarGeneration) {
+        //    VkCommandBuffer cmd = m_context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
+        //    if (m_needsLUTGeneration) { GenerateAtmosphereLUT(cmd); m_needsLUTGeneration = false; }
+        //     if (m_needsStarGeneration) { GenerateStarTexture(cmd); m_needsStarGeneration = false; }
+        //                // Облака генерируем в последнюю очередь (самые медленные)
+        //        if (m_needsCloudGeneration) { GenerateCloudNoise(cmd); m_needsCloudGeneration = false; }
+        //     m_context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
+        //    
+        //       return; // Пропускаем рендеринг в этом кадре
+        //}
 
         // Begin timing
         auto startTime = std::chrono::high_resolution_clock::now();
@@ -491,7 +483,7 @@ namespace Renderer {
 
     void SkyRenderer::UpdateSunMoonPositions() {
         // Simple sun position based on time of day
-        float sunAngle = (m_skyParams.timeOfDay / 24.0f) * 2.0f * std::numbers::pi - std::numbers::pi / 2.0f;
+        float sunAngle = static_cast<float>((m_skyParams.timeOfDay / 24.0f) * 2.0f * std::numbers::pi - std::numbers::pi / 2.0f);
 
         m_skyParams.sunDirection = glm::normalize(glm::vec3(
             0.0f,
@@ -568,9 +560,9 @@ namespace Renderer {
         // Sample sky in multiple directions
         const int samples = 16;
         for (int i = 0; i < samples; ++i) {
-            float theta = (float(i) / float(samples)) * 2.0f * std::numbers::pi;
+            float theta = (float(i) / float(samples)) * 2.0f * static_cast<float>(std::numbers::pi);
             for (int j = 0; j < samples / 2; ++j) {
-                float phi = (float(j) / float(samples / 2)) * std::numbers::pi;
+                float phi = (float(j) / float(samples / 2)) * static_cast<float>(std::numbers::pi);
 
                 glm::vec3 dir(
                     sin(phi) * cos(theta),
@@ -643,7 +635,7 @@ namespace Renderer {
 
         // Rayleigh phase function
         float cosTheta = glm::dot(rayDir, sunDir);
-        float phase = 3.0f / (16.0f * std::numbers::pi) * (1.0f + cosTheta * cosTheta);
+        float phase = 3.0f / (16.0f * static_cast<float>(std::numbers::pi)) * (1.0f + cosTheta * cosTheta);
 
         return scatter * rayleighBeta * phase * 20.0f; // Intensity scale
     }
@@ -681,7 +673,7 @@ namespace Renderer {
 
         // Henyey-Greenstein phase function
         float cosTheta = glm::dot(rayDir, sunDir);
-        float phase = (1.0f - g * g) / (4.0f * std::numbers::pi * pow(1.0f + g * g - 2.0f * g * cosTheta, 1.5f));
+        float phase = (1.0f - g * g) / (4.0f * static_cast<float>(std::numbers::pi) * pow(1.0f + g * g - 2.0f * g * cosTheta, 1.5f));
 
         return scatter * mieBeta * phase * 20.0f;
     }
@@ -1061,7 +1053,7 @@ namespace Renderer {
         pushConstants.octaves = settings.cloudOctaves;    // Или ваши значения
         pushConstants.lacunarity = 2.0f;
         pushConstants.gain = 0.5f;
-        pushConstants.scale = settings.cloudResolution;      // Например, из настроек качества
+        pushConstants.scale = static_cast<float>(settings.cloudResolution);      // Например, из настроек качества
 
         vkCmdPushConstants(
             cmd,
@@ -1162,7 +1154,7 @@ namespace Renderer {
                 "Make sure MeadowApp::LoadShaders() was called before creating pipelines.");
         }
 
-        // --- Descriptor layout (как у тебя раньше) ---
+        // --- Descriptor layout  ---
         VkDescriptorSetLayoutBinding binding{};
         binding.binding = 0;
         binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;

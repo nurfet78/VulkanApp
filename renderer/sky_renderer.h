@@ -34,6 +34,13 @@ namespace vkinit {
 
 namespace Renderer {
 
+	// Constants for atmosphere simulation
+	constexpr float EARTH_RADIUS = 6371000.0f;        // Earth radius in meters
+	constexpr float ATMOSPHERE_RADIUS = 6471000.0f;   // Atmosphere outer radius
+	constexpr float ATMOSPHERE_HEIGHT = 100000.0f;    // 100km atmosphere height
+	constexpr float SUN_ANGULAR_RADIUS = 0.00465f;    // Sun's angular radius
+	constexpr float MOON_ANGULAR_RADIUS = 0.00257f;   // Moon's angular radius
+
     // Sky quality profiles for performance scaling
     enum class SkyQualityProfile {
         Low,     // 512x512 sky, no volumetric clouds, simple scattering
@@ -192,7 +199,6 @@ namespace Renderer {
         void Render(VkCommandBuffer cmd,
             VkImageView targetImageView,
             VkImage targetImage,
-            VkImageView depthImageView,
             VkExtent2D extent,
             const glm::mat4& projection,
             const glm::mat4& viewRotationOnly,
@@ -433,7 +439,7 @@ namespace Renderer {
             const glm::vec3& rayDir,
             float rayLength,
             float planetRadius,
-            float atmosphereRadius,
+            float atmosphereRadius = ATMOSPHERE_RADIUS,
             int numSamples = 8);
 
         static glm::vec3 PreethamSky(

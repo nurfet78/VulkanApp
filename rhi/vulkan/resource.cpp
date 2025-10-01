@@ -677,12 +677,12 @@ Mesh* ResourceManager::CreateSphereMesh(uint32_t segments) {
     std::vector<uint32_t> indices;
     
     for (uint32_t lat = 0; lat <= segments; lat++) {
-        float theta = lat * std::numbers::pi / segments;
+        float theta = lat * static_cast<float>(std::numbers::pi) / segments;
         float sinTheta = sin(theta);
         float cosTheta = cos(theta);
         
         for (uint32_t lon = 0; lon <= segments; lon++) {
-            float phi = lon * 2 * std::numbers::pi / segments;
+            float phi = lon * 2 * static_cast<float>(std::numbers::pi) / segments;
             float sinPhi = sin(phi);
             float cosPhi = cos(phi);
             

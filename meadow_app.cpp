@@ -103,7 +103,7 @@ void MeadowApp::OnInitialize() {
     CreateSyncObjects();
 
     // Set resize callback
-    GetWindow()->SetResizeCallback([this](uint32_t width, uint32_t height) {
+    GetWindow()->SetResizeCallback([this](uint32_t, uint32_t) {
         m_framebufferResized = true;
     });
 
@@ -128,7 +128,7 @@ void MeadowApp::OnInitialize() {
 
 void MeadowApp::Update() {
     // Вычисляем delta time
-    float currentTime = glfwGetTime();
+    float currentTime = static_cast<float>(glfwGetTime());
     m_deltaTime = currentTime - m_lastFrameTime;
     m_lastFrameTime = currentTime;
 
@@ -635,8 +635,8 @@ void MeadowApp::UpdateCamera() {
         double deltaX = xpos - lastX;
         double deltaY = ypos - lastY;
 
-        m_cameraRotationY += deltaX * 0.01f;
-        m_cameraRotationX += deltaY * 0.01f;
+        m_cameraRotationY += static_cast<float>(deltaX * 0.01f);
+        m_cameraRotationX += static_cast<float>(deltaY * 0.01f);
         m_cameraRotationX = glm::clamp(m_cameraRotationX, -1.5f, 1.5f);
 
         lastX = xpos;

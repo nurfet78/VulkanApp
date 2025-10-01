@@ -2,6 +2,7 @@
 
 #include "rhi/vulkan/vulkan_common.h"
 #include "renderer/lighting_types.h"
+#include "rhi/vulkan/resource.h"
 
 namespace RHI::Vulkan {
 	class Device;
@@ -11,7 +12,6 @@ namespace RHI::Vulkan {
 	class ReloadablePipeline;
 	class DescriptorAllocator;
 	class DescriptorLayoutCache;
-	class Mesh;
 }
 
 namespace Renderer {

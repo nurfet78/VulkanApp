@@ -3,7 +3,6 @@
 #include "rhi/vulkan/device.h"
 #include "rhi/vulkan/shader_manager.h"
 #include "renderer/material_system.h"
-#include "rhi/vulkan/resource.h"
 
 namespace Renderer {
 

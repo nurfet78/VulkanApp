@@ -78,38 +78,40 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
 // ----------------------------------------------------------------------------
 
 void main() {
     // Проверка корректности нормалей
     if (length(fragNormal) < 0.1) {
-        outColor = vec4(1.0, 0.0, 0.0, 1.0); // Красный = плохие нормали
+        outColor = vec4(1.0, 0.0, 0.0, 1.0);
         return;
     }
     
-    // Получение свойств материала с clamp для безопасности
+    // Получение свойств материала
     vec3 albedo = material.baseColor.rgb;
     float metallic = clamp(material.metallic, 0.0, 1.0);
-    float roughness = clamp(material.roughness, 0.08, 1.0); // Min 0.04 для стабильности
+    float roughness = clamp(material.roughness, 0.04, 1.0);
     
     // Векторы
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(ubo.cameraPos - fragWorldPos);
-
-    float NdotV = max(dot(N, V), 0.0);
-
-    // ДОБАВИТЬ: Сохранить исходный NdotV для fade
-    float originalNdotV = NdotV;
-
-    // Защита для граничных углов
-    NdotV = max(NdotV, 0.02); // Увеличил с 0.001 до 0.02
+    float NdotV = max(dot(N, V), EPSILON);
     
     // Fresnel reflectance at normal incidence
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo, metallic);
     
-    // Начальная освещенность - ambient
-    vec3 Lo = ubo.ambientColor * albedo * material.ao;
+    // Ambient - простой и слабый для металлов
+    vec3 kS_ambient = FresnelSchlickRoughness(NdotV, F0, roughness);
+    vec3 kD_ambient = (1.0 - kS_ambient) * (1.0 - metallic);
+    vec3 ambient = (kD_ambient * albedo) * ubo.ambientColor * material.ao * 0.3; // Уменьшен
+    
+    // Начальная освещенность
+    vec3 Lo = ambient;
     
     // Цикл по всем источникам света
     for (int i = 0; i < ubo.lightCount; i++) {
@@ -144,10 +146,12 @@ void main() {
         // Half vector
         vec3 H = normalize(V + L);
         
-        // Важные dot products с защитой от нулей
+        // Важные dot products
         float NdotL = max(dot(N, L), 0.0);
-        float NdotV = max(dot(N, V), EPSILON);
         float HdotV = max(dot(H, V), 0.0);
+        
+        // Пропускаем если свет не попадает на поверхность
+        if (NdotL <= 0.0) continue;
         
         // Radiance
         vec3 radiance = light.color * light.intensity * attenuation;
@@ -157,41 +161,32 @@ void main() {
         float G   = GeometrySmith(N, V, L, roughness);
         vec3  F   = FresnelSchlick(HdotV, F0);
         
-        // Безопасный расчет specular с защитой от division by zero
+        // Расчет specular
         vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(NdotV, 0.01) * max(NdotL, 0.01) + 0.001;
-        vec3 specular = numerator / denominator;
-        
-        // Clamp specular для предотвращения экстремальных значений
-        specular = min(specular, vec3(100.0));
+        float denominator = 4.0 * NdotV * NdotL;
+        vec3 specular = numerator / max(denominator, EPSILON);
         
         // Энергосбережение
         vec3 kS = F;
         vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
         
-        // Добавляем вклад этого источника света
-        Lo += (kD * albedo / PI + specular * 2.0) * radiance * NdotL;
-
+        // Добавляем вклад света
+        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
     }
     
-    // Rim light для контурной подсветки
-    vec3 rimColor = vec3(1.0, 1.0, 1.0);
-    float rimIntensity = 2.5;
-    float rimPower = 3.0;
-    float fresnelFactor = pow(1.0 - max(dot(N, V), 0.0), rimPower);
-    vec3 rimContribution = rimColor * rimIntensity * fresnelFactor;
-    Lo += rimContribution;
+    // Лёгкий rim light только на краях (опционально, можно убрать)
+    float rimStrength = pow(1.0 - NdotV, 4.0) * 0.3 * (1.0 - metallic);
+    Lo += vec3(rimStrength) * ubo.ambientColor;
     
     // Emissive
-    vec3 emission = albedo * material.emissive;
-    Lo += emission;
+    Lo += albedo * material.emissive;
     
     // Проверка на NaN и бесконечность
     if (any(isnan(Lo)) || any(isinf(Lo))) {
         Lo = vec3(0.0);
     }
     
-    // Clamp перед tone mapping для дополнительной безопасности
+    // Clamp перед tone mapping
     Lo = clamp(Lo, 0.0, 100.0);
     
     // Tone mapping (Reinhard)

@@ -444,9 +444,9 @@ void MaterialSystem::CreateDefaultMaterials() {
 
 	auto metalMat = CreateMaterial("metal", "pbr");
 	if (metalMat) {
-		metalMat->SetParameter("baseColor", glm::vec4(1.0f, 0.95f, 0.5f, 1.0f));
+		metalMat->SetParameter("baseColor", glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
 		metalMat->SetParameter("metallic", 1.0f);
-		metalMat->SetParameter("roughness", 0.2f);
+		metalMat->SetParameter("roughness", 0.02f);
 		metalMat->SetParameter("ao", 1.0f);
 		metalMat->SetParameter("emissive", 0.0f);
 	}
@@ -489,7 +489,7 @@ void MaterialSystem::CreateDefaultMaterials() {
 
 	auto shinyPlasticMat = CreateMaterial("shiny_plastic", "pbr");
 	if (shinyPlasticMat) {
-		shinyPlasticMat->SetParameter("baseColor", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		shinyPlasticMat->SetParameter("baseColor", glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
 		shinyPlasticMat->SetParameter("metallic", 0.0f);
 		shinyPlasticMat->SetParameter("roughness", 0.2f);
 		shinyPlasticMat->SetParameter("ao", 1.0f);
@@ -512,6 +512,15 @@ void MaterialSystem::CreateDefaultMaterials() {
 		chromeMat->SetParameter("roughness", 0.02f);
 		chromeMat->SetParameter("ao", 1.0f);
 		chromeMat->SetParameter("emissive", 0.0f);
+	}
+
+	auto goldMat = CreateMaterial("gold", "pbr");
+	if (goldMat) {
+        goldMat->SetParameter("baseColor", glm::vec4(1.0f, 0.85f, 0.0f, 1.0f));
+        goldMat->SetParameter("metallic", 1.0f);
+        goldMat->SetParameter("roughness", 0.15f);
+        goldMat->SetParameter("ao", 1.0f);
+        goldMat->SetParameter("emissive", 0.0f);
 	}
 }
 

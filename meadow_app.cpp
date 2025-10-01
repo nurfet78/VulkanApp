@@ -165,7 +165,7 @@ void MeadowApp::CollectLightData(float time) {
         1.5f + sin(time * 0.3f) * 0.5f,  // Плавание вверх-вниз
         sin(time * 0.5f) * radius
     );
-    //m_pointLightTransform->SetPosition(lightPos);
+    m_pointLightTransform->SetPosition(lightPos);
 
     std::vector<Renderer::LightData> lights;
 
@@ -201,7 +201,7 @@ void MeadowApp::CollectLightData(float time) {
         m_cameraPos,
         time,  // pass time for shader animation
         lights,
-        glm::vec3(0.2f, 0.2f, 0.2f) // ambient
+        glm::vec3(0.05f, 0.05f, 0.05f) // ambient
     );
 }
 
@@ -513,7 +513,7 @@ void MeadowApp::InitializeScene() {
     // Создать направленный свет
 	m_sunLight = std::make_unique<Scene::Light>(Scene::Light::Type::Directional);
 	m_sunLight->SetColor(glm::vec3(1.0f, 0.95f, 0.8f));
-	m_sunLight->SetIntensity(4.0f); 
+	m_sunLight->SetIntensity(5.0f); 
 	m_sunLight->SetDirection(glm::vec3(-0.5f, -1.0f, -0.2f));
 
     //// === НАСТРОЙКА Half-Lambert ===
@@ -526,8 +526,8 @@ void MeadowApp::InitializeScene() {
     // Точечный свет с Toon shading
     m_pointLight = std::make_unique<Scene::Light>(Scene::Light::Type::Point);
     m_pointLight->SetColor(glm::vec3(1.0f, 1.0f, 1.0f));
-    m_pointLight->SetIntensity(50.0f);
-    m_pointLight->SetRange(20.0f);
+    m_pointLight->SetIntensity(5.0f);
+    m_pointLight->SetRange(10.0f);
 
     //// === НАСТРОЙКА Toon shading ===
     //m_pointLight->SetShadingModel(Scene::Light::ShadingModel::Toon);

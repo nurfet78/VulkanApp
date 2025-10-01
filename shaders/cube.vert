@@ -6,9 +6,9 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
 layout(location = 3) in vec3 inTangent;
 
-// Push constants Ч уникальные дл€ объекта
+// Push constants Ч модель и нормали отдельно
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;
+    mat4 model;
     mat4 normalMatrix;
 } pc;
 
@@ -18,7 +18,7 @@ struct LightData {
     vec3 direction;
     float intensity;
     vec3 color;
-    int type;          // 0=directional, 1=point, 2=spot
+    int type;
     vec2 coneAngles;
     int shadingModel;
     float wrapFactor;
@@ -47,26 +47,26 @@ layout(location = 4) out float fragTime;
 layout(location = 5) out vec3 fragTangent;
 
 void main() {
-    // World position
-    vec4 worldPos = pc.mvp * vec4(inPosition, 1.0); // примен€ем MVP
-    fragWorldPos = vec3(worldPos);
-
-    // Normal
+    // »—ѕ–ј¬Ћ≈Ќќ: World position использу€ “ќЋ№ ќ модельную матрицу
+    vec4 worldPos = pc.model * vec4(inPosition, 1.0);
+    fragWorldPos = worldPos.xyz;
+    
+    // Normal (уже правильно)
     fragNormal = normalize((pc.normalMatrix * vec4(inNormal, 0.0)).xyz);
-
+    
     // Tangent
     fragTangent = normalize((pc.normalMatrix * vec4(inTangent, 0.0)).xyz);
-
+    
     // Texture coordinates
     fragTexCoord = inTexCoord;
-
+    
     // Camera position
     fragViewPos = ubo.cameraPos;
-
+    
     // Time
     fragTime = ubo.time;
-
-    // Final vertex position
-    gl_Position = pc.mvp * vec4(inPosition, 1.0);
+    
+    // »—ѕ–ј¬Ћ≈Ќќ: Final position = Projection * View * World
+    gl_Position = ubo.projection * ubo.view * worldPos;
     gl_Position.y = -gl_Position.y;
 }

@@ -28,7 +28,7 @@ namespace Renderer {
 
 		m_materialSystem->CreateDefaultMaterials();
 
-		m_material = m_materialSystem->GetMaterial("shiny_plastic");
+		m_material = m_materialSystem->GetMaterial("gold");
 		
 		if (!m_material) {
 			throw std::runtime_error("Default material not found");
@@ -150,7 +150,7 @@ namespace Renderer {
 
 		// Push constants
 		CubePushConstants pushConstants;
-		pushConstants.mvp = m_sceneUBO.projection * m_sceneUBO.view * model;
+		pushConstants.model = model;
 		pushConstants.normalMatrix = glm::transpose(glm::inverse(model));
 		
 		vkCmdPushConstants(cmd, materialTemplate->GetPipelineLayout(),

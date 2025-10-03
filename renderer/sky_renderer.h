@@ -267,6 +267,8 @@ namespace Renderer {
         void RenderMoon(VkCommandBuffer cmd);
         void PostProcess(VkCommandBuffer cmd, VkImageView target, VkImage targetImage);
 
+        void InitializeRenderTargetLayouts();
+
         // Updates
         void UpdateAtmosphere();
         void UpdateDescriptorSets();

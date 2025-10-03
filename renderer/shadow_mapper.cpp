@@ -26,14 +26,23 @@ void ShadowMapper::CreateShadowMaps() {
     m_shadowMaps.reserve(m_cascadeCount);
     
     for (uint32_t i = 0; i < m_cascadeCount; i++) {
-        m_shadowMaps.push_back(std::make_unique<RHI::Vulkan::Image>(
-            m_device,
-            m_shadowMapSize,
-            m_shadowMapSize,
-            VK_FORMAT_D32_SFLOAT,
-            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_IMAGE_ASPECT_DEPTH_BIT
-        ));
+		RHI::Vulkan::ImageDesc shadowDesc{};
+		shadowDesc.width = m_shadowMapSize;
+		shadowDesc.height = m_shadowMapSize;
+		shadowDesc.depth = 1;
+		shadowDesc.arrayLayers = 1; // одна текстура на один каскад
+		shadowDesc.mipLevels = 1;
+		shadowDesc.format = VK_FORMAT_D32_SFLOAT;
+		shadowDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		shadowDesc.imageType = VK_IMAGE_TYPE_2D;
+		shadowDesc.tiling = VK_IMAGE_TILING_OPTIMAL;
+		shadowDesc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		shadowDesc.samples = VK_SAMPLE_COUNT_1_BIT;
+		shadowDesc.aspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT;
+		shadowDesc.memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
+		shadowDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		m_shadowMaps.push_back(std::make_unique<RHI::Vulkan::Image>(m_device, shadowDesc));
     }
 }
 

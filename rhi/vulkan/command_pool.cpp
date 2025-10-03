@@ -220,36 +220,36 @@ VkCommandBuffer CommandPoolManager::BeginSingleTimeCommandsCompute() {
 }
 
 void CommandPoolManager::EndSingleTimeCommandsCompute(VkCommandBuffer cmd) {
-    VK_CHECK(vkEndCommandBuffer(cmd));
+	VK_CHECK(vkEndCommandBuffer(cmd));
 
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmd;
 
-    VkFenceCreateInfo fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    VkFence fence;
-    VK_CHECK(vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence));
+	VkFenceCreateInfo fenceInfo{};
+	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	VkFence fence;
+	VK_CHECK(vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &fence));
 
-    std::cout << "[Compute] Submitting command buffer from pool family "
-        << m_computePool->GetQueueFamilyIndex()
-        << " to compute queue family "
-        << m_device->GetComputeQueueFamily()
-        << std::endl;
+	std::cout << "[Compute] Submitting command buffer from pool family "
+		<< m_computePool->GetQueueFamilyIndex()
+		<< " to compute queue family "
+		<< m_device->GetComputeQueueFamily()
+		<< std::endl;
 
-    VkResult res = vkQueueSubmit(m_device->GetComputeQueue(), 1, &submitInfo, fence);
+	VkResult res = vkQueueSubmit(m_device->GetComputeQueue(), 1, &submitInfo, fence);
 
-    if (res != VK_SUCCESS) {
-        vkDestroyFence(m_device->GetDevice(), fence, nullptr);
-        throw std::runtime_error("Vulkan error: vkQueueSubmit failed");
-    }
+	if (res != VK_SUCCESS) {
+		vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+		throw std::runtime_error("Vulkan error: vkQueueSubmit failed");
+	}
 
-    VkResult waitRes = vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
-    std::cout << "vkWaitForFences result: " << waitRes << std::endl;
+	VkResult waitRes = vkWaitForFences(m_device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+	std::cout << "vkWaitForFences result: " << waitRes << std::endl;
 
-    vkDestroyFence(m_device->GetDevice(), fence, nullptr);
-    m_computePool->FreeCommandBuffer(cmd);
+	vkDestroyFence(m_device->GetDevice(), fence, nullptr);
+	m_computePool->FreeCommandBuffer(cmd);
 }
 
 

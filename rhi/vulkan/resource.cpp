@@ -159,97 +159,65 @@ void Buffer::CopyFromImmediate(CommandPool* pool, Buffer* srcBuffer, VkDeviceSiz
 }
 
 // Image implementation
-Image::Image(Device* device,
-    uint32_t width,
-    uint32_t height,
-    uint32_t depth,
-    uint32_t arrayLayers,
-    VkFormat format,
-    VkImageUsageFlags usage,
-    VkImageType imageType,
-    VkImageTiling tiling,
-    VkImageLayout initialLayout,
-    VkSampleCountFlagBits samples,
-    VkImageAspectFlags aspectFlags,
-    VmaMemoryUsage memoryUsage,
-    VkSharingMode sharingMode,
-    uint32_t queueFamilyIndexCount,
-    const uint32_t* pQueueFamilyIndices,
-    VkImageCreateFlags flags)
-    : m_device(device),
-    m_format(format)
+Image::Image(Device* device, const ImageDesc& desc)
+	: m_device(device),
+	  m_width(desc.width),
+	  m_height(desc.height),
+	  m_mipLevels(desc.mipLevels),
+      m_arrayLayers(desc.arrayLayers),
+	  m_format(desc.format)
 {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = imageType;
-    imageInfo.extent.width = width;
-    imageInfo.extent.height = height;
-    imageInfo.extent.depth = (imageType == VK_IMAGE_TYPE_3D ? depth : 1);
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = (imageType == VK_IMAGE_TYPE_3D ? 1 : arrayLayers);
-    imageInfo.format = format;
-    imageInfo.tiling = tiling;
-    imageInfo.initialLayout = initialLayout;
-    imageInfo.usage = usage;
-    imageInfo.samples = samples;
-    imageInfo.sharingMode = sharingMode;
-    imageInfo.queueFamilyIndexCount = queueFamilyIndexCount;
-    imageInfo.pQueueFamilyIndices = pQueueFamilyIndices;
-    imageInfo.flags = flags;
+    imageInfo.imageType = desc.imageType;
+    imageInfo.extent.width = desc.width;
+    imageInfo.extent.height = desc.height;
+    imageInfo.extent.depth = (desc.imageType == VK_IMAGE_TYPE_3D ? desc.depth : 1);
+    imageInfo.mipLevels = desc.mipLevels;
+    imageInfo.arrayLayers = (desc.imageType == VK_IMAGE_TYPE_3D ? 1 : desc.arrayLayers);
+    imageInfo.format = desc.format;
+    imageInfo.tiling = desc.tiling;
+    imageInfo.initialLayout = desc.initialLayout;
+    imageInfo.usage = desc.usage;
+    imageInfo.samples = desc.samples;
+    imageInfo.sharingMode = desc.sharingMode;
+    imageInfo.queueFamilyIndexCount = desc.queueFamilyIndexCount;
+    imageInfo.pQueueFamilyIndices = desc.pQueueFamilyIndices;
+    imageInfo.flags = desc.flags;
 
     VmaAllocationCreateInfo allocInfo{};
-    allocInfo.usage = memoryUsage;
+    allocInfo.usage = desc.memoryUsage;
 
     if (vmaCreateImage(m_device->GetAllocator(), &imageInfo, &allocInfo, &m_image, &m_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create Vulkan image");
     }
 
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_image;
-    viewInfo.viewType = (imageType == VK_IMAGE_TYPE_2D ? VK_IMAGE_VIEW_TYPE_2D :
-        imageType == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D :
-        VK_IMAGE_VIEW_TYPE_2D);
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = aspectFlags;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = (imageType == VK_IMAGE_TYPE_3D ? 1 : arrayLayers);
+	VkImageViewCreateInfo viewInfo{};
+	viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	viewInfo.image = m_image;
 
-    if (vkCreateImageView(m_device->GetDevice(), &viewInfo, nullptr, &m_imageView) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create image view");
-    }
+	// Выбор правильного типа view
+	if (desc.imageType == VK_IMAGE_TYPE_2D) {
+		viewInfo.viewType = (desc.arrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+	}
+	else if (desc.imageType == VK_IMAGE_TYPE_3D) {
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+	}
+	else if (desc.imageType == VK_IMAGE_TYPE_1D) {
+		viewInfo.viewType = (desc.arrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+	}
+
+	viewInfo.format = desc.format;
+	viewInfo.subresourceRange.aspectMask = desc.aspectFlags;
+	viewInfo.subresourceRange.baseMipLevel = 0;
+	viewInfo.subresourceRange.levelCount = desc.mipLevels;
+	viewInfo.subresourceRange.baseArrayLayer = 0;
+	viewInfo.subresourceRange.layerCount = desc.arrayLayers;
+
+	if (vkCreateImageView(m_device->GetDevice(), &viewInfo, nullptr, &m_imageView) != VK_SUCCESS) {
+		throw std::runtime_error("Failed to create image view");
+	}
 }
-
-// Короткий конструктор для 2D изображений
-Image::Image(Device* device,
-    uint32_t width,
-    uint32_t height,
-    VkFormat format,
-    VkImageUsageFlags usage,
-    VkImageAspectFlags aspectFlags)
-    : Image(device,
-        width,
-        height,
-        1,                      // depth всегда 1 для 2D
-        1,                      // arrayLayers по умолчанию 1
-        format,
-        usage,
-        VK_IMAGE_TYPE_2D,       // imageType
-        VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_SAMPLE_COUNT_1_BIT,
-        aspectFlags,
-        VMA_MEMORY_USAGE_GPU_ONLY,
-        VK_SHARING_MODE_EXCLUSIVE,
-        0,                      // queueFamilyIndexCount
-        nullptr,                // pQueueFamilyIndices
-        0)                      // flags
-{
-    // Это просто вызов полного конструктора с типовыми параметрами
-}
-
 
 Image::~Image() {
     if (m_imageView) {
@@ -261,113 +229,113 @@ Image::~Image() {
 }
 
 void Image::TransitionLayout(
-    VkCommandBuffer cmd,
-    VkImageLayout oldLayout,
-    VkImageLayout newLayout,
-    uint32_t baseMipLevel,
-    uint32_t levelCount,
-    uint32_t baseArrayLayer,
-    uint32_t layerCount
+	VkCommandBuffer cmd,
+	VkImageLayout oldLayout,
+	VkImageLayout newLayout,
+	uint32_t baseMipLevel,
+	uint32_t levelCount,
+	uint32_t baseArrayLayer,
+	uint32_t layerCount
 ) {
-    VkImageMemoryBarrier2 barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = m_image;
-    barrier.subresourceRange.baseMipLevel = baseMipLevel;
-    barrier.subresourceRange.levelCount = levelCount;
-    barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
-    barrier.subresourceRange.layerCount = layerCount;
+	VkImageMemoryBarrier2 barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+	barrier.oldLayout = oldLayout;
+	barrier.newLayout = newLayout;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = m_image;
+	barrier.subresourceRange.baseMipLevel = baseMipLevel;
+	barrier.subresourceRange.levelCount = levelCount;
+	barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
+	barrier.subresourceRange.layerCount = layerCount;
 
-    // --- Определение aspectMask ---
-    VkFormat format = m_format;
-    barrier.subresourceRange.aspectMask = 0;
+	// --- Определение aspectMask ---
+	VkFormat format = m_format;
+	barrier.subresourceRange.aspectMask = 0;
 
-    switch (format) {
-    case VK_FORMAT_D32_SFLOAT_S8_UINT:
-    case VK_FORMAT_D24_UNORM_S8_UINT:
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        break;
+	switch (format) {
+	case VK_FORMAT_D32_SFLOAT_S8_UINT:
+	case VK_FORMAT_D24_UNORM_S8_UINT:
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+		break;
 
-    case VK_FORMAT_D16_UNORM:
-    case VK_FORMAT_X8_D24_UNORM_PACK32:
-    case VK_FORMAT_D32_SFLOAT:
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        break;
+	case VK_FORMAT_D16_UNORM:
+	case VK_FORMAT_X8_D24_UNORM_PACK32:
+	case VK_FORMAT_D32_SFLOAT:
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		break;
 
-    default:
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        break;
-    }
+	default:
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		break;
+	}
 
-    // --- Хелпер для выбора стадий/доступа ---
-    auto getStageAccess = [](VkImageLayout layout, VkPipelineStageFlags2& stageMask, VkAccessFlags2& accessMask) {
-        switch (layout) {
-        case VK_IMAGE_LAYOUT_UNDEFINED:
-            stageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            accessMask = 0;
-            break;
+	// --- Хелпер для выбора стадий/доступа ---
+	auto getStageAccess = [](VkImageLayout layout, VkPipelineStageFlags2& stageMask, VkAccessFlags2& accessMask) {
+		switch (layout) {
+		case VK_IMAGE_LAYOUT_UNDEFINED:
+			stageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+			accessMask = 0;
+			break;
 
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            accessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            break;
+		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+			accessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+			break;
 
-        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-            stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            accessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            break;
+		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+			accessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+			break;
 
-        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            accessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            break;
+		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+			accessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+			break;
 
-        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            accessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-            break;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+			accessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+			break;
 
-        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            // Универсальный вариант — безопасен и для graphics, и для transfer
-            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            accessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            break;
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+			// Универсальный вариант — безопасен и для graphics, и для transfer
+			stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+			accessMask = VK_ACCESS_2_SHADER_READ_BIT;
+			break;
 
-        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-            stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-            accessMask = 0;
-            break;
+		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+			stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+			accessMask = 0;
+			break;
 
-        default:
-            stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            accessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            break;
-        }
-    };
+		default:
+			stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+			accessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+			break;
+		}
+	};
 
-    // --- Установка src/dst масок ---
-    getStageAccess(oldLayout, barrier.srcStageMask, barrier.srcAccessMask);
-    getStageAccess(newLayout, barrier.dstStageMask, barrier.dstAccessMask);
+	// --- Установка src/dst масок ---
+	getStageAccess(oldLayout, barrier.srcStageMask, barrier.srcAccessMask);
+	getStageAccess(newLayout, barrier.dstStageMask, barrier.dstAccessMask);
 
-    // --- Вызов ---
-    VkDependencyInfo depInfo{};
-    depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    depInfo.imageMemoryBarrierCount = 1;
-    depInfo.pImageMemoryBarriers = &barrier;
+	// --- Вызов ---
+	VkDependencyInfo depInfo{};
+	depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+	depInfo.imageMemoryBarrierCount = 1;
+	depInfo.pImageMemoryBarriers = &barrier;
 
-    vkCmdPipelineBarrier2(cmd, &depInfo);
+	vkCmdPipelineBarrier2(cmd, &depInfo);
 }
 
 void Image::TransitionLayout(VkImageLayout oldLayout, VkImageLayout newLayout, Core::CoreContext* context) {
 
-    VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommands();
+	VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommands();
 
-    TransitionLayout(cmd, oldLayout, newLayout, 0, 1, 0, 1);
+	TransitionLayout(cmd, oldLayout, newLayout, 0, m_mipLevels, 0, m_arrayLayers);
 
-    context->GetCommandPoolManager()->EndSingleTimeCommands(cmd);
+	context->GetCommandPoolManager()->EndSingleTimeCommands(cmd);
 }
 
 void Image::GenerateMipmaps(VkCommandBuffer cmd) {
@@ -564,11 +532,23 @@ void ResourceManager::CreateDefaultTextures() {
 
 Image* ResourceManager::CreateTexture(const std::string& name, uint32_t width, uint32_t height,
                                      VkFormat format, const void* data) {
-    auto image = std::make_unique<Image>(
-        m_device, width, height, format,
-        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT
-    );
+	RHI::Vulkan::ImageDesc desc{};
+	desc.width = width;
+	desc.height = height;
+	desc.depth = 1;
+	desc.arrayLayers = 1;
+	desc.mipLevels = 1;
+	desc.format = format;
+	desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	desc.imageType = VK_IMAGE_TYPE_2D;
+	desc.tiling = VK_IMAGE_TILING_OPTIMAL;
+	desc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	desc.samples = VK_SAMPLE_COUNT_1_BIT;
+	desc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
+	desc.memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
+	desc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	auto image = std::make_unique<RHI::Vulkan::Image>(m_device, desc);
     
     // Upload data if provided
     if (data) {

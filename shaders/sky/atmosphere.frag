@@ -19,8 +19,6 @@ layout(binding = 0) uniform AtmosphereUniforms {
     float exposure;
 } atmosphere;
 
-layout(binding = 1) uniform sampler2D transmittanceLUT;
-layout(binding = 2) uniform sampler2D multiScatteringLUT;
 
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;

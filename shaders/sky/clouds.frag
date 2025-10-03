@@ -21,7 +21,6 @@ layout(binding = 0) uniform CloudUniforms {
 
 layout(binding = 1) uniform sampler3D cloudNoise;
 layout(binding = 2) uniform sampler3D cloudDetail;
-layout(binding = 3) uniform sampler2D skyBuffer;
 
 layout(push_constant) uniform CloudPushConstants {
     mat4 invViewProj;

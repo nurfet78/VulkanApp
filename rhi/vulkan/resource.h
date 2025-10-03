@@ -45,34 +45,30 @@ private:
     void* m_mappedData = nullptr;
 };
 
+struct ImageDesc {
+	uint32_t width = 1;
+	uint32_t height = 1;
+	uint32_t depth = 1;
+	uint32_t arrayLayers = 1;
+	uint32_t mipLevels = 1;
+	VkFormat format = VK_FORMAT_UNDEFINED;
+	VkImageUsageFlags usage = 0;
+	VkImageType imageType = VK_IMAGE_TYPE_2D;
+	VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+	VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+	VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
+	VmaMemoryUsage memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
+	VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	uint32_t queueFamilyIndexCount = 0;
+	const uint32_t* pQueueFamilyIndices = nullptr;
+	VkImageCreateFlags flags = 0;
+};
 
 // Image wrapper
 class Image {
 public:
-    Image(Device* device,
-        uint32_t width,
-        uint32_t height,
-        uint32_t depth,
-        uint32_t arrayLayers,
-        VkFormat format,
-        VkImageUsageFlags usage,
-        VkImageType imageType = VK_IMAGE_TYPE_2D,
-        VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL,
-        VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
-        VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
-        VmaMemoryUsage memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-        VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        uint32_t queueFamilyIndexCount = 0,
-        const uint32_t* pQueueFamilyIndices = nullptr,
-        VkImageCreateFlags flags = 0);
-
-    Image(Device* device,
-        uint32_t width,
-        uint32_t height,
-        VkFormat format,
-        VkImageUsageFlags usage,
-        VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
+    Image(Device* device, const ImageDesc& desc);
 
     ~Image();
     
@@ -86,27 +82,18 @@ public:
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
     uint32_t GetMipLevels() const { return m_mipLevels; }
-    uint32_t GetDepth() const { return m_depth; }
-    uint32_t GetArrayLayers() const { return m_arrayLayers; }
-    VkImageLayout GetCurrentLayout() const { return m_currentLayout; }
-
-    void SetCurrentLayout(VkImageLayout newLayout) {
-        m_currentLayout = newLayout;
-    }
-    
+   
 private:
     Device* m_device;
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_imageView = VK_NULL_HANDLE;
     VmaAllocation m_allocation = VK_NULL_HANDLE;
     
-    uint32_t m_width;
-    uint32_t m_height;
-    uint32_t m_mipLevels;
+	uint32_t m_width;
+	uint32_t m_height;
+	uint32_t m_mipLevels;
     uint32_t m_arrayLayers;
-    VkFormat m_format;
-    uint32_t m_depth;
-    VkImageLayout m_currentLayout;
+	VkFormat m_format;
 
     void TransitionLayout(
         VkCommandBuffer cmd,
@@ -117,6 +104,53 @@ private:
         uint32_t baseArrayLayer,
         uint32_t layerCount
     );
+
+	static void GetStageAccessForLayout(VkImageLayout layout,
+		VkPipelineStageFlags2& stageMask,
+		VkAccessFlags2& accessMask) {
+
+		switch (layout) {
+		case VK_IMAGE_LAYOUT_UNDEFINED:
+			stageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+			accessMask = 0;
+			break;
+
+		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+			accessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+			accessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+			accessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+			accessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+			stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; // универсально, можно оптимизировать до FRAGMENT_SHADER
+			accessMask = VK_ACCESS_2_SHADER_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+			stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+			accessMask = 0;
+			break;
+
+		default:
+			stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+			accessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+			break;
+		}
+    }
 };
 
 // Sampler wrapper

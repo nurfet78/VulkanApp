@@ -11,8 +11,8 @@ layout(binding = 0) uniform StarUniforms {
     float time;
 } stars;
 
-layout(binding = 0) uniform sampler2D starTexture;
-layout(binding = 1) uniform sampler2D milkyWayTexture;
+layout(binding = 1) uniform sampler2D starTexture; 
+layout(binding = 2) uniform sampler2D milkyWayTexture; 
 
 layout(push_constant) uniform StarsPushConstants {
     mat4 invViewProj;

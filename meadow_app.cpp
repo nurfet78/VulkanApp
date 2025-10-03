@@ -15,6 +15,7 @@
 #include "core/core_context.h"
 #include "renderer/CubeRenderer.h"
 #include "renderer/material_system.h"
+#include "renderer/sky_renderer.h"
 #include "scene/components.h"
 
 
@@ -99,6 +100,23 @@ void MeadowApp::OnInitialize() {
         VK_FORMAT_D32_SFLOAT
     );
 
+    m_skyRenderer = std::make_unique<Renderer::SkyRenderer>(
+        m_device.get(),
+        m_coreContext.get(),
+        m_shaderManager.get(),
+        m_swapchain->GetFormat(),
+        m_swapchain->GetDepthFormat()
+    );
+
+	Renderer::SkyParams params;
+	params.timeOfDay = 14.0f;  // 2 PM
+	params.cloudCoverage = 0.6f;
+	params.turbidity = 2.5f;
+	m_skyRenderer->SetSkyParams(params);
+
+	// Set quality profile based on GPU
+	m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::High);
+
     // 6. Create sync objects and command buffers for each frame
     CreateSyncObjects();
 
@@ -126,6 +144,37 @@ void MeadowApp::OnInitialize() {
     std::cout << "Worker Threads: " << GetJobSystem()->GetThreadCount() << std::endl;
 }
 
+void MeadowApp::DrowScene(VkCommandBuffer cmd, uint32_t imageIndex) {
+	// === RENDER SKY FIRST ===
+	m_device->BeginDebugLabel(cmd, "Sky Pass", { 0.5f, 0.8f, 1.0f, 1.0f });
+
+	// Create view matrix without translation (for skybox effect)
+	glm::mat4 viewRotationOnly = glm::mat4(glm::mat3(m_camera->GetViewMatrix()));
+
+	m_skyRenderer->Render(
+		cmd,
+		m_swapchain->GetFrame(imageIndex).imageView,
+		m_swapchain->GetFrame(imageIndex).image,
+		m_swapchain->GetExtent(),
+		m_camera->GetProjectionMatrix(),
+		viewRotationOnly,
+		m_cameraPos
+	);
+
+	m_device->EndDebugLabel(cmd);
+
+
+	m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
+	m_cubeRenderer->Render(
+		cmd,
+		m_swapchain->GetFrame(imageIndex).imageView,
+		m_depthBuffer->GetView(),
+		m_swapchain->GetExtent(),
+		m_cubeTransform->GetMatrix()
+	);
+	m_device->EndDebugLabel(cmd);
+}
+
 void MeadowApp::Update() {
     // Вычисляем delta time
     float currentTime = static_cast<float>(glfwGetTime());
@@ -138,6 +187,11 @@ void MeadowApp::Update() {
 
     HandleSkyControls();
     UpdateCamera();
+
+	// Update sky renderer
+	if (m_skyRenderer) {
+		m_skyRenderer->Update(m_deltaTime);
+	}
 
     // Update cube rotation with time
     static float rotation = 0.0f;
@@ -223,6 +277,54 @@ void MeadowApp::LoadShaders() {
     if (!cubeProgram->Compile()) {
         throw std::runtime_error("Failed to compile Cube shader program!");
     }
+
+	// === SKY SHADERS ===
+	auto* atmosphereProgram = m_shaderManager->CreateProgram("Atmosphere");
+	atmosphereProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/atmosphere.vert.spv");
+	atmosphereProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/atmosphere.frag.spv");
+	if (!atmosphereProgram->Compile()) {
+		throw std::runtime_error("Failed to compile Atmosphere shader!");
+	}
+
+	auto* cloudsProgram = m_shaderManager->CreateProgram("Clouds");
+    cloudsProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/clouds.vert.spv");
+    cloudsProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/clouds.frag.spv");
+	if (!cloudsProgram->Compile()) {
+		throw std::runtime_error("Failed to compile Atmosphere shader!");
+	}
+
+	auto* starsProgram = m_shaderManager->CreateProgram("Stars");
+	starsProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/stars.vert.spv");
+	starsProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/stars.frag.spv");
+	if (!starsProgram->Compile()) {
+		throw std::runtime_error("Failed to compile Stars shader!");
+	}
+
+	auto* postProcessProgram = m_shaderManager->CreateProgram("PostProcess");
+	postProcessProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/postprocess.vert.spv");
+	postProcessProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/postprocess.frag.spv");
+	if (!postProcessProgram->Compile()) {
+		throw std::runtime_error("Failed to compile PostProcess shader!");
+	}
+
+	// Compute shaders
+	auto* lutProgram = m_shaderManager->CreateProgram("GenerateLUT");
+	lutProgram->AddStage(VK_SHADER_STAGE_COMPUTE_BIT, "shaders/generate_lut.comp.spv");
+	if (!lutProgram->Compile()) {
+		throw std::runtime_error("Failed to compile GenerateLUT compute shader!");
+	}
+
+	auto* cloudNoiseProgram = m_shaderManager->CreateProgram("CloudNoise");
+	cloudNoiseProgram->AddStage(VK_SHADER_STAGE_COMPUTE_BIT, "shaders/cloud_noise.comp.spv");
+	if (!cloudNoiseProgram->Compile()) {
+		throw std::runtime_error("Failed to compile CloudNoise compute shader!");
+	}
+
+	auto* starGenProgram = m_shaderManager->CreateProgram("GenerateStars");
+	starGenProgram->AddStage(VK_SHADER_STAGE_COMPUTE_BIT, "shaders/generate_stars.comp.spv");
+	if (!starGenProgram->Compile()) {
+		throw std::runtime_error("Failed to compile GenerateStars compute shader!");
+	}
 }
 
 void MeadowApp::OnShutdown() {
@@ -236,6 +338,8 @@ void MeadowApp::OnShutdown() {
 
     // 1. Уничтожаем объекты синхронизации
     DestroySyncObjects();
+
+    if (m_skyRenderer) m_skyRenderer.reset();
 
     // 2. Уничтожаем высокоуровневые объекты рендера
     if (m_cubeRenderer) m_cubeRenderer.reset();
@@ -372,6 +476,7 @@ void MeadowApp::RecreateSwapchain() {
     m_depthBuffer.reset();
 
     // Destroy renderers
+    m_skyRenderer.reset();
     m_cubeRenderer.reset();
     m_trianglePipeline.reset();
 
@@ -384,6 +489,21 @@ void MeadowApp::RecreateSwapchain() {
 
     // Recreate depth buffer
     CreateDepthBuffer();
+
+	m_skyRenderer = std::make_unique<Renderer::SkyRenderer>(
+		m_device.get(),
+		m_coreContext.get(),
+		m_shaderManager.get(),
+		m_swapchain->GetFormat(),
+		m_swapchain->GetDepthFormat()
+	);
+
+	Renderer::SkyParams params;
+	params.timeOfDay = 14.0f;
+	params.cloudCoverage = 0.6f;
+	params.turbidity = 2.5f;
+	m_skyRenderer->SetSkyParams(params);
+	m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::High);
 
     // Recreate renderers
     m_cubeRenderer = std::make_unique<Renderer::CubeRenderer>(
@@ -445,18 +565,8 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     // depth barrier не нужен - dynamic rendering сам переводит depth buffer в нужный layout!
 
-    m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
+    DrowScene(cmd, imageIndex);
 
-    // Render cube - dynamic rendering автоматически управляет layout'ами
-    m_cubeRenderer->Render(
-        cmd,
-        m_swapchain->GetFrame(imageIndex).imageView,
-        m_depthBuffer->GetView(),
-        m_swapchain->GetExtent(),
-        m_cubeTransform->GetMatrix()
-    );
-
-    m_device->EndDebugLabel(cmd);
 
     // Transition to present
     imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -479,14 +589,23 @@ void MeadowApp::RecordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 void MeadowApp::CreateDepthBuffer() {
     VkExtent2D extent = m_swapchain->GetExtent();
 
-    m_depthBuffer = std::make_unique<RHI::Vulkan::Image>(
-        m_device.get(),
-        extent.width,
-        extent.height,
-        VK_FORMAT_D32_SFLOAT,
-        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        VK_IMAGE_ASPECT_DEPTH_BIT
-    );
+	RHI::Vulkan::ImageDesc depthDesc{};
+	depthDesc.width = extent.width;
+	depthDesc.height = extent.height;
+	depthDesc.depth = 1;
+	depthDesc.arrayLayers = 1;
+	depthDesc.mipLevels = 1;
+	depthDesc.format = VK_FORMAT_D32_SFLOAT;
+	depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	depthDesc.imageType = VK_IMAGE_TYPE_2D;
+	depthDesc.tiling = VK_IMAGE_TILING_OPTIMAL;
+	depthDesc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depthDesc.samples = VK_SAMPLE_COUNT_1_BIT;
+	depthDesc.aspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT;
+	depthDesc.memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
+	depthDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	m_depthBuffer = std::make_unique<RHI::Vulkan::Image>(m_device.get(), depthDesc);
 
     // НЕ НУЖНО делать transition - dynamic rendering сделает это автоматически
     // при первом использовании в vkCmdBeginRendering()

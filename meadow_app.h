@@ -20,6 +20,7 @@ namespace Renderer {
     class TriangleRenderer;
     class CubeRenderer;
     class MaterialSystem;
+    class SkyRenderer;
 }
 
 namespace Core {
@@ -53,6 +54,8 @@ private:
         VkFence inFlightFence = VK_NULL_HANDLE;
     };
 
+    void DrowScene(VkCommandBuffer cmd, uint32_t imageIndex);
+
     void CreateSyncObjects();
     void CreateDepthBuffer();
     void InitializeScene();
@@ -83,6 +86,7 @@ private:
 
     std::unique_ptr<Renderer::MaterialSystem> m_materialSystem;
     std::unique_ptr<Renderer::CubeRenderer> m_cubeRenderer;
+    std::unique_ptr<Renderer::SkyRenderer> m_skyRenderer;
     std::unique_ptr<RHI::Vulkan::Image> m_depthBuffer;
     std::unique_ptr<Scene::Camera> m_camera;
     std::unique_ptr<Scene::Transform> m_cubeTransform;

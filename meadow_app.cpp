@@ -165,7 +165,7 @@ void MeadowApp::DrowScene(VkCommandBuffer cmd, uint32_t imageIndex) {
 	m_device->EndDebugLabel(cmd);
 
 
-	/*m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
+	m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
 	m_cubeRenderer->Render(
 		cmd,
 		m_swapchain->GetFrame(imageIndex).imageView,
@@ -173,7 +173,7 @@ void MeadowApp::DrowScene(VkCommandBuffer cmd, uint32_t imageIndex) {
 		m_swapchain->GetExtent(),
 		m_cubeTransform->GetMatrix()
 	);
-	m_device->EndDebugLabel(cmd);*/
+	m_device->EndDebugLabel(cmd);
 }
 
 void MeadowApp::Update() {

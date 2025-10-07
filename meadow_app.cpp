@@ -104,18 +104,19 @@ void MeadowApp::OnInitialize() {
         m_device.get(),
         m_coreContext.get(),
         m_shaderManager.get(),
+        m_swapchain->GetExtent(),
         m_swapchain->GetFormat(),
         m_swapchain->GetDepthFormat()
     );
 
 	Renderer::SkyParams params;
-	params.timeOfDay = 14.0f;  // 2 PM
-	params.cloudCoverage = 0.6f;
-	params.turbidity = 2.5f;
+	params.timeOfDay = 12.0f;  // 2 PM
+	params.cloudCoverage = 0.5f;
+	params.turbidity = 2.0f;
 	m_skyRenderer->SetSkyParams(params);
 
 	// Set quality profile based on GPU
-	m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::High);
+	//m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::High);
 
     // 6. Create sync objects and command buffers for each frame
     CreateSyncObjects();
@@ -164,7 +165,7 @@ void MeadowApp::DrowScene(VkCommandBuffer cmd, uint32_t imageIndex) {
 	m_device->EndDebugLabel(cmd);
 
 
-	m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
+	/*m_device->BeginDebugLabel(cmd, "Cube Pass", { 0.0f, 1.0f, 0.0f, 1.0f });
 	m_cubeRenderer->Render(
 		cmd,
 		m_swapchain->GetFrame(imageIndex).imageView,
@@ -172,7 +173,7 @@ void MeadowApp::DrowScene(VkCommandBuffer cmd, uint32_t imageIndex) {
 		m_swapchain->GetExtent(),
 		m_cubeTransform->GetMatrix()
 	);
-	m_device->EndDebugLabel(cmd);
+	m_device->EndDebugLabel(cmd);*/
 }
 
 void MeadowApp::Update() {
@@ -307,7 +308,22 @@ void MeadowApp::LoadShaders() {
 		throw std::runtime_error("Failed to compile PostProcess shader!");
 	}
 
+	auto* sunBillboardProgram = m_shaderManager->CreateProgram("SunBillboard");
+    sunBillboardProgram->AddStage(VK_SHADER_STAGE_VERTEX_BIT, "shaders/sun_billboard.vert.spv");
+    sunBillboardProgram->AddStage(VK_SHADER_STAGE_FRAGMENT_BIT, "shaders/sun_billboard.frag.spv");
+	if (!sunBillboardProgram->Compile()) {
+		throw std::runtime_error("Failed to compile SunBillboard shader!");
+	}
+
 	// Compute shaders
+
+	auto* sunTextureProgram = m_shaderManager->CreateProgram("SunTexture");
+    sunTextureProgram->AddStage(VK_SHADER_STAGE_COMPUTE_BIT, "shaders/sun_texture.comp.spv");
+	if (!sunTextureProgram->Compile()) {
+		throw std::runtime_error("Failed to compile SunTexture compute shader!");
+	}
+
+
 	auto* lutProgram = m_shaderManager->CreateProgram("GenerateLUT");
 	lutProgram->AddStage(VK_SHADER_STAGE_COMPUTE_BIT, "shaders/generate_lut.comp.spv");
 	if (!lutProgram->Compile()) {
@@ -494,6 +510,7 @@ void MeadowApp::RecreateSwapchain() {
 		m_device.get(),
 		m_coreContext.get(),
 		m_shaderManager.get(),
+        m_swapchain->GetExtent(),
 		m_swapchain->GetFormat(),
 		m_swapchain->GetDepthFormat()
 	);

@@ -27,8 +27,8 @@ layout(push_constant) uniform PushConstants {
 } push;
 
 const float PI = 3.14159265359;
-const int ATMOSPHERE_SAMPLES = 32;
-const int LIGHT_SAMPLES = 8;
+const int ATMOSPHERE_SAMPLES = 16;
+const int LIGHT_SAMPLES = 4;
 
 // Rayleigh phase function
 float rayleighPhase(float cosTheta) {
@@ -119,40 +119,36 @@ vec3 computeScattering(vec3 rayStart, vec3 rayDir, float rayLength, vec3 sunDir)
 }
 
 void main() {
-    // Reconstruct world space ray direction
-    vec4 target = push.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-    vec3 rayDir = normalize(target.xyz / target.w - push.cameraPos);
+   // Reconstruct world space ray direction
+ vec4 target = push.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+ vec3 rayDir = normalize(target.xyz / target.w - push.cameraPos);
+ 
+ // Ray origin (camera position relative to planet center)
+ vec3 rayStart = vec3(0, atmosphere.planetRadius + 1000.0, 0) + push.cameraPos;
+ 
+ // Intersect with atmosphere
+ vec2 atmosphereIntersect = raySphereIntersect(rayStart, rayDir, atmosphere.atmosphereRadius);
+ vec2 groundIntersect = raySphereIntersect(rayStart, rayDir, atmosphere.planetRadius);
+ 
+ vec3 scattering = vec3(0.0);
+ 
+ if (atmosphereIntersect.y > 0.0) {
+     float rayLength = atmosphereIntersect.y;
+     
+     // If ray hits ground, limit to ground intersection
+     if (groundIntersect.x > 0.0) {
+         rayLength = min(rayLength, groundIntersect.x);
+     }
+     
+     scattering = computeScattering(rayStart, rayDir, rayLength, atmosphere.sunDirection);
+ }
+ 
     
-    // Ray origin (camera position relative to planet center)
-    vec3 rayStart = vec3(0.0, atmosphere.planetRadius + 1000.0, 0.0); // 1km above surface
+    vec3 finalColor = scattering;
     
-    // Intersect with atmosphere
-    vec2 atmosphereIntersect = raySphereIntersect(rayStart, rayDir, atmosphere.atmosphereRadius);
-    vec2 groundIntersect = raySphereIntersect(rayStart, rayDir, atmosphere.planetRadius);
     
-    vec3 scattering = vec3(0.0);
+    // Tone mapping with slightly stronger response
+    finalColor = 1.0 - exp(-finalColor * atmosphere.exposure * 1.1);
     
-    if (atmosphereIntersect.y > 0.0) {
-        float rayLength = atmosphereIntersect.y;
-        
-        // If ray hits ground, limit to ground intersection
-        if (groundIntersect.x > 0.0) {
-            rayLength = min(rayLength, groundIntersect.x);
-        }
-        
-        scattering = computeScattering(rayStart, rayDir, rayLength, atmosphere.sunDirection);
-    }
-    
-    // Add sun disk
-    float sunAngularRadius = 0.00465; // Sun's angular radius
-    float distToSun = acos(clamp(dot(rayDir, atmosphere.sunDirection), -1.0, 1.0));
-    if (distToSun < sunAngularRadius) {
-        float sunDisk = 1.0 - smoothstep(sunAngularRadius * 0.8, sunAngularRadius, distToSun);
-        scattering += vec3(1.0, 0.95, 0.8) * sunDisk * atmosphere.sunIntensity * 100.0;
-    }
-    
-    // Tone mapping
-    scattering = 1.0 - exp(-scattering * atmosphere.exposure);
-    
-    fragColor = vec4(scattering, 1.0);
+    fragColor = vec4(finalColor, 1.0);
 }

@@ -11,37 +11,38 @@ namespace Renderer {
 
     // Quality presets
     struct QualitySettings {
-        uint32_t skyResolution;
-        uint32_t cloudResolution;
-        uint32_t starResolution;
-        int atmosphereSamples;
-        int cloudSamples;
-        bool volumetricClouds;
-        bool temporalAccumulation;
-        int cloudOctaves;
+		int atmosphereSamples;
+		int cloudSamples;
+		bool volumetricClouds;
+		bool temporalAccumulation;
+		int cloudOctaves;
     };
 
     static const QualitySettings g_qualityPresets[] = {
-        {512,  256,  512,  8,  16, false, false, 2}, // Low
-        {1024, 512,  1024, 16, 32, true,  false, 3}, // Medium
-        {2048, 1024, 2048, 32, 64, true,  true,  4}, // High
-        {4096, 2048, 4096, 64, 128, true, true,  5}  // Ultra
+		{8,  16, false, false, 2},  // Low
+	    {16, 32, true,  false, 3},  // Medium
+	    {32, 64, true,  true,  4},  // High
+	    {64, 128, true, true,  5}   // Ultra
     };
 
     SkyRenderer::SkyRenderer(RHI::Vulkan::Device* device,
         Core::CoreContext* context,
         RHI::Vulkan::ShaderManager* shaderManager,
+        VkExtent2D currentExtent,
         VkFormat colorFormat,
         VkFormat depthFormat)
         : m_device(device)
         , m_context(context)
         , m_shaderManager(shaderManager)
+        , m_currentExtent(currentExtent)
         , m_colorFormat(colorFormat) 
         , m_depthFormat(depthFormat) {
 
         // Initialize default cloud layers
         m_cloudLayers.push_back({ 2000.0f, 500.0f, 0.5f, 0.1f, 1.0f, 0 }); // Cumulus
         m_cloudLayers.push_back({ 8000.0f, 200.0f, 0.3f, 0.2f, 2.0f, 2 }); // Cirrus
+
+        SetQualityProfile(Renderer::SkyQualityProfile::High);
 
         // Create resources
         CreateUniformBuffers();
@@ -56,6 +57,9 @@ namespace Renderer {
         CreateStarsPipeline();
         CreatePostProcessPipeline();
         CreateComputePipelines();
+
+		CreateSunTexturePipeline();   
+		CreateSunBillboardPipeline();
 
         //// Create descriptor sets
         CreateDescriptorSets();
@@ -73,6 +77,7 @@ namespace Renderer {
 		GenerateAtmosphereLUT(cmd);
 		GenerateCloudNoise(cmd);
 		GenerateStarTexture(cmd);
+        GenerateSunTexture(cmd);
 		context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
 
 		// Переводим placeholder текстуры через существующую функцию
@@ -106,6 +111,8 @@ namespace Renderer {
 		m_atmosphereLUTPipeline.reset();
 		m_cloudNoisePipeline.reset();
 		m_starGeneratorPipeline.reset();
+		m_sunBillboardPipeline.reset();
+		m_sunTexturePipeline.reset();
 
 		// 2. Уничтожаем дескрипторный пул (это освободит все дескрипторные сеты)
 		if (m_descriptorPool) {
@@ -114,6 +121,12 @@ namespace Renderer {
 		}
 
 		// 3. Уничтожаем дескрипторные layouts
+		if (m_sunBillboardDescSetLayout) {
+			vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_sunBillboardDescSetLayout, nullptr);
+		}
+		if (m_sunTextureDescSetLayout) {
+			vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_sunTextureDescSetLayout, nullptr);
+		}
 		if (m_atmosphereDescSetLayout) {
 			vkDestroyDescriptorSetLayout(m_device->GetDevice(), m_atmosphereDescSetLayout, nullptr);
 			m_atmosphereDescSetLayout = VK_NULL_HANDLE;
@@ -155,6 +168,7 @@ namespace Renderer {
 		m_historyBuffer.reset();
 
 		// 6. Уничтожаем текстуры
+        m_sunBillboardTexture.reset();
 		m_starTexture.reset();
 		m_cloudNoiseTexture.reset();
 		m_cloudDetailNoise.reset();
@@ -179,6 +193,23 @@ namespace Renderer {
         const glm::mat4& viewRotationOnly,
         const glm::vec3& cameraPos) {
 
+		if (m_skyBuffer && (m_currentExtent.width != extent.width ||
+			m_currentExtent.height != extent.height)) {
+
+			vkDeviceWaitIdle(m_device->GetDevice());
+
+			// Пересоздаем render targets
+			m_skyBuffer.reset();
+			m_cloudBuffer.reset();
+			m_bloomBuffer.reset();
+			if (m_historyBuffer) m_historyBuffer.reset();
+
+			m_currentExtent = extent;
+			CreateRenderTargets();
+			InitializeRenderTargetLayouts();
+			UpdateDescriptorSets();
+		}
+
 		m_currentExtent = extent;
 		m_currentProjection = projection;
 		m_currentView = viewRotationOnly;
@@ -190,6 +221,7 @@ namespace Renderer {
 		auto startTime = std::chrono::high_resolution_clock::now();
 
 		RenderAtmosphere(cmd);
+        RenderSunBillboard(cmd);
 
 		auto atmosphereTime = std::chrono::high_resolution_clock::now();
 		m_stats.atmospherePassMs = std::chrono::duration<float, std::milli>(atmosphereTime - startTime).count();
@@ -206,7 +238,7 @@ namespace Renderer {
 		m_stats.starPassMs = std::chrono::duration<float, std::milli>(starsTime - atmosphereTime).count();
 
 		if (m_skyParams.cloudCoverage > 0.01f) {
-			// RenderClouds(cmd);
+			 //RenderClouds(cmd);
 		}
 
 		auto cloudsTime = std::chrono::high_resolution_clock::now();
@@ -235,11 +267,13 @@ namespace Renderer {
 			toAttachment.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 			toAttachment.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
 
-			// If the image was initialized to SHADER_READ_ONLY (you do that in InitializeRenderTargetLayouts),
-			// oldLayout should be SHADER_READ_ONLY. If you want to be extra-safe, you can branch on frameIndex==0
-			// and use VK_IMAGE_LAYOUT_UNDEFINED there — but since you call InitializeRenderTargetLayouts to
-			// SHADER_READ_ONLY, using SHADER_READ_ONLY here is correct.
-			toAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			
+			if (m_frameIndex == 0) {
+				toAttachment.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // <-- используем UNDEFINED
+			}
+			else {
+				toAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			}
 			toAttachment.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 			toAttachment.image = m_skyBuffer->GetHandle();
@@ -272,14 +306,6 @@ namespace Renderer {
 		renderInfo.colorAttachmentCount = 1;
 		renderInfo.pColorAttachments = &colorAttachment;
 
-		vkCmdBeginRendering(cmd, &renderInfo);
-
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_atmospherePipeline->GetPipeline());
-
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-			m_atmospherePipeline->GetLayout(),
-			0, 1, &m_atmosphereDescSet, 0, nullptr);
-
 		VkViewport viewport{};
 		viewport.x = 0.0f;
 		viewport.y = 0.0f;
@@ -293,6 +319,14 @@ namespace Renderer {
 		scissor.offset = { 0, 0 };
 		scissor.extent = m_currentExtent;
 		vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+		vkCmdBeginRendering(cmd, &renderInfo);
+
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_atmospherePipeline->GetPipeline());
+
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			m_atmospherePipeline->GetLayout(),
+			0, 1, &m_atmosphereDescSet, 0, nullptr);
 
 		struct PushConstants {
 			glm::mat4 invViewProj;
@@ -334,7 +368,127 @@ namespace Renderer {
 		vkCmdPipelineBarrier2(cmd, &depInfo);
     }
 
+	void SkyRenderer::RenderSunBillboard(VkCommandBuffer cmd) {
+		// Transition sky buffer back to color attachment
+		{
+			VkImageMemoryBarrier2 toAttachment{};
+			toAttachment.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+			toAttachment.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+			toAttachment.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+			toAttachment.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+			toAttachment.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+				VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+			toAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			toAttachment.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			toAttachment.image = m_skyBuffer->GetHandle();
+			toAttachment.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+			VkDependencyInfo depInfo{};
+			depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			depInfo.imageMemoryBarrierCount = 1;
+			depInfo.pImageMemoryBarriers = &toAttachment;
+
+			vkCmdPipelineBarrier2(cmd, &depInfo);
+		}
+
+		VkRenderingAttachmentInfo colorAttachment{};
+		colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+		colorAttachment.imageView = m_skyBuffer->GetView();
+		colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // Keep existing content
+		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+		VkRenderingInfo renderInfo{};
+		renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+		renderInfo.renderArea = { 0, 0, m_currentExtent.width, m_currentExtent.height };
+		renderInfo.layerCount = 1;
+		renderInfo.colorAttachmentCount = 1;
+		renderInfo.pColorAttachments = &colorAttachment;
+
+		vkCmdBeginRendering(cmd, &renderInfo);
+
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_sunBillboardPipeline->GetPipeline());
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			m_sunBillboardPipeline->GetLayout(),
+			0, 1, &m_sunBillboardDescSet, 0, nullptr);
+
+		struct PushConstants {
+			glm::mat4 viewProj;
+			glm::vec3 sunDirection;
+			float sunSize;
+			glm::vec3 cameraPos;
+			float intensity;
+		} push;
+
+		push.viewProj = m_currentProjection * m_currentView;
+		push.sunDirection = m_skyParams.sunDirection;
+		push.sunSize = 0.05f; // Billboard size in NDC
+		push.cameraPos = m_currentCameraPos;
+		push.intensity = m_skyParams.sunIntensity;
+
+		vkCmdPushConstants(cmd, m_sunBillboardPipeline->GetLayout(),
+			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+			0, sizeof(push), &push);
+
+		vkCmdDraw(cmd, 6, 1, 0, 0); // 6 vertices for 2 triangles (fullscreen quad)
+
+		vkCmdEndRendering(cmd);
+
+		// Transition back to shader read
+		{
+			VkImageMemoryBarrier2 toShaderRead{};
+			toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+			toShaderRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+			toShaderRead.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+			toShaderRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+			toShaderRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+			toShaderRead.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			toShaderRead.image = m_skyBuffer->GetHandle();
+			toShaderRead.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+			VkDependencyInfo depInfo{};
+			depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			depInfo.imageMemoryBarrierCount = 1;
+			depInfo.pImageMemoryBarriers = &toShaderRead;
+
+			vkCmdPipelineBarrier2(cmd, &depInfo);
+		}
+	}
+
     void SkyRenderer::RenderClouds(VkCommandBuffer cmd) {
+
+		{
+			// Ensure sky buffer is in COLOR_ATTACHMENT_OPTIMAL before BeginRendering
+			VkImageMemoryBarrier2 toAttachment{};
+			toAttachment.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+
+			// We're coming from shader-read (previous frame) -> need to write as color attachment now
+			toAttachment.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+			toAttachment.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+			toAttachment.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+			toAttachment.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+
+
+			if (m_frameIndex == 0) {
+				toAttachment.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // <-- используем UNDEFINED
+			}
+			else {
+				toAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			}
+			toAttachment.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+			toAttachment.image = m_cloudBuffer->GetHandle();
+			toAttachment.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+			VkDependencyInfo depInfo{};
+			depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			depInfo.imageMemoryBarrierCount = 1;
+			depInfo.pImageMemoryBarriers = &toAttachment;
+
+			vkCmdPipelineBarrier2(cmd, &depInfo);
+		}
+
 		VkRenderingAttachmentInfo colorAttachment = {};
 		colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 		colorAttachment.imageView = m_cloudBuffer->GetView();
@@ -570,7 +724,7 @@ namespace Renderer {
 
         // Adjust sun intensity based on position
         float sunElevation = m_skyParams.sunDirection.y;
-        m_skyParams.sunIntensity = glm::max(0.0f, sunElevation) * 10.0f;
+        m_skyParams.sunIntensity = glm::max(0.0f, sunElevation) * 20.0f;
     }
 
     void SkyRenderer::UpdateAtmosphere() {
@@ -786,14 +940,15 @@ namespace Renderer {
     }
 
     void SkyRenderer::CreateTextures() {
-		const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+		const uint32_t STAR_RESOLUTION = 2048;
+		const uint32_t CLOUD_NOISE_RESOLUTION = 128;  // 3D текстуры дорогие, держим разумный размер
 
 		// === STORAGE IMAGES (будут заполняться compute шейдерами) ===
 
 		// Star texture (2D) - storage для compute, потом sampled
 		RHI::Vulkan::ImageDesc starDesc{};
-		starDesc.width = settings.starResolution;
-		starDesc.height = settings.starResolution;
+		starDesc.width = STAR_RESOLUTION;
+		starDesc.height = STAR_RESOLUTION;
 		starDesc.depth = 1;
 		starDesc.mipLevels = 1;
 		starDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -816,9 +971,9 @@ namespace Renderer {
 
 		// Cloud noise texture (3D) - storage для compute, потом sampled
 		RHI::Vulkan::ImageDesc cloudNoiseDesc{};
-		cloudNoiseDesc.width = settings.cloudResolution;
-		cloudNoiseDesc.height = settings.cloudResolution;
-		cloudNoiseDesc.depth = settings.cloudResolution / 4; // 3D depth
+		cloudNoiseDesc.width = CLOUD_NOISE_RESOLUTION;
+		cloudNoiseDesc.height = CLOUD_NOISE_RESOLUTION;
+		cloudNoiseDesc.depth = CLOUD_NOISE_RESOLUTION / 4; // 3D depth
 		cloudNoiseDesc.arrayLayers = 1;    // для 3D — всегда 1
 		cloudNoiseDesc.mipLevels = 1;    // без мип-уровней
 		cloudNoiseDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -840,9 +995,9 @@ namespace Renderer {
 
 		// Cloud detail noise (3D)
 		RHI::Vulkan::ImageDesc cloudDetailNoiseDesc{};
-		cloudDetailNoiseDesc.width = settings.cloudResolution / 2;
-		cloudDetailNoiseDesc.height = settings.cloudResolution / 2;
-		cloudDetailNoiseDesc.depth = settings.cloudResolution / 8; // глубина для 3D
+		cloudDetailNoiseDesc.width = CLOUD_NOISE_RESOLUTION / 2;
+		cloudDetailNoiseDesc.height = CLOUD_NOISE_RESOLUTION / 2;
+		cloudDetailNoiseDesc.depth = CLOUD_NOISE_RESOLUTION / 8; // глубина для 3D
 		cloudDetailNoiseDesc.arrayLayers = 1;    // для 3D всегда 1
 		cloudDetailNoiseDesc.mipLevels = 1;    // без мип-уровней
 		cloudDetailNoiseDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -902,7 +1057,59 @@ namespace Renderer {
 		moonDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
 		m_moonTexture = std::make_unique<RHI::Vulkan::Image>(m_device, moonDesc);
+
+		// Sun billboard texture
+		RHI::Vulkan::ImageDesc sunDesc{};
+		sunDesc.width = 512;
+		sunDesc.height = 512;
+		sunDesc.depth = 1;
+		sunDesc.mipLevels = 1;
+		sunDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+		sunDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		sunDesc.imageType = VK_IMAGE_TYPE_2D;
+		sunDesc.tiling = VK_IMAGE_TILING_OPTIMAL;
+		sunDesc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		sunDesc.samples = VK_SAMPLE_COUNT_1_BIT;
+		sunDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
+		sunDesc.memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+		m_sunBillboardTexture = std::make_unique<RHI::Vulkan::Image>(m_device, sunDesc);
+		m_sunBillboardTexture->TransitionLayout(
+			VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_GENERAL,
+			m_context
+		);
     }
+
+	void SkyRenderer::GenerateSunTexture(VkCommandBuffer cmd) {
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sunTexturePipeline->GetPipeline());
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+			m_sunTexturePipeline->GetLayout(),
+			0, 1, &m_sunTextureDescSet, 0, nullptr);
+
+		vkCmdDispatch(cmd, 512 / 8, 512 / 8, 1);
+
+		// Transition to shader read
+		VkImageMemoryBarrier barrier = {};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sunBillboardTexture->GetHandle();
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(cmd,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			0, 0, nullptr, 0, nullptr, 1, &barrier);
+	}
 
     void SkyRenderer::CreateLUTs() {
 		// Transmittance LUT - storage для compute
@@ -957,12 +1164,14 @@ namespace Renderer {
     }
 
     void SkyRenderer::CreateRenderTargets() {
-		const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+		// Используем текущий extent или дефолтный размер
+		uint32_t width = m_currentExtent.width > 0 ? m_currentExtent.width : 1920;
+		uint32_t height = m_currentExtent.height > 0 ? m_currentExtent.height : 1080;
 
-		// Sky buffer - используется как color attachment, потом читается как texture
+		// Sky buffer - полный размер экрана
 		RHI::Vulkan::ImageDesc skyDesc{};
-		skyDesc.width = settings.skyResolution;
-		skyDesc.height = settings.skyResolution;
+		skyDesc.width = width;
+		skyDesc.height = height;
 		skyDesc.depth = 1;
 		skyDesc.arrayLayers = 1;
 		skyDesc.mipLevels = 1;
@@ -977,35 +1186,18 @@ namespace Renderer {
 		skyDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
 		m_skyBuffer = std::make_unique<RHI::Vulkan::Image>(m_device, skyDesc);
-		// НЕ нужен TransitionLayout - dynamic rendering сделает это автоматически
 
-		// Cloud buffer - используется как color attachment, потом читается как texture
-		RHI::Vulkan::ImageDesc cloudDesc{};
-		cloudDesc.width = settings.cloudResolution * 2;
-		cloudDesc.height = settings.cloudResolution * 2;
-		cloudDesc.depth = 1;
-		cloudDesc.arrayLayers = 1;
-		cloudDesc.mipLevels = 1;
-		cloudDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-		cloudDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		cloudDesc.imageType = VK_IMAGE_TYPE_2D;
-		cloudDesc.tiling = VK_IMAGE_TILING_OPTIMAL;
-		cloudDesc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		cloudDesc.samples = VK_SAMPLE_COUNT_1_BIT;
-		cloudDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-		cloudDesc.memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
-		cloudDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
+		// Cloud buffer - полный размер экрана
+		RHI::Vulkan::ImageDesc cloudDesc = skyDesc; // копируем настройки
 		m_cloudBuffer = std::make_unique<RHI::Vulkan::Image>(m_device, cloudDesc);
-		// НЕ нужен TransitionLayout
 
-		// Bloom buffer с мип-уровнями для downsampling
+		// Bloom buffer - половина размера экрана с мипами
 		RHI::Vulkan::ImageDesc bloomDesc{};
-		bloomDesc.width = settings.skyResolution / 2;
-		bloomDesc.height = settings.skyResolution / 2;
+		bloomDesc.width = width / 2;
+		bloomDesc.height = height / 2;
 		bloomDesc.depth = 1;
 		bloomDesc.arrayLayers = 1;
-		bloomDesc.mipLevels = 5; // 5 уровней мипов для bloom pyramid
+		bloomDesc.mipLevels = 5;
 		bloomDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
 		bloomDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 		bloomDesc.imageType = VK_IMAGE_TYPE_2D;
@@ -1017,26 +1209,10 @@ namespace Renderer {
 		bloomDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
 		m_bloomBuffer = std::make_unique<RHI::Vulkan::Image>(m_device, bloomDesc);
-		// НЕ нужен TransitionLayout
 
-		// History buffer для temporal accumulation (опционально)
-		if (settings.temporalAccumulation) {
-			RHI::Vulkan::ImageDesc historyDesc{};
-			historyDesc.width = settings.skyResolution;
-			historyDesc.height = settings.skyResolution;
-			historyDesc.depth = 1;
-			historyDesc.arrayLayers = 1;
-			historyDesc.mipLevels = 1;
-			historyDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-			historyDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-			historyDesc.imageType = VK_IMAGE_TYPE_2D;
-			historyDesc.tiling = VK_IMAGE_TILING_OPTIMAL;
-			historyDesc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			historyDesc.samples = VK_SAMPLE_COUNT_1_BIT;
-			historyDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-			historyDesc.memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
-			historyDesc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
+		// History buffer только если используется temporal accumulation
+		if (m_useTemporalAccumulation) {
+			RHI::Vulkan::ImageDesc historyDesc = skyDesc;
 			m_historyBuffer = std::make_unique<RHI::Vulkan::Image>(m_device, historyDesc);
 		}
     }
@@ -1066,62 +1242,51 @@ namespace Renderer {
 
     void SkyRenderer::UpdateUniformBuffers() {
         // Update atmosphere UBO
-        struct AtmosphereUBO {
-            glm::vec3 sunDirection;
-            float sunIntensity;
-            glm::vec3 rayleighBeta;
-            float turbidity;
-            glm::vec3 mieBeta;
-            float mieG;
-            glm::vec3 groundColor;
-            float planetRadius;
-            glm::vec3 sunColor;
-            float atmosphereRadius;
-        } atmosphereData;
+		AtmosphereUBO atmosphereData{};
 
-        atmosphereData.sunDirection = m_skyParams.sunDirection;
-        atmosphereData.sunIntensity = m_skyParams.sunIntensity;
-        atmosphereData.rayleighBeta = m_skyParams.rayleighBeta * m_skyParams.rayleighCoeff;
-        atmosphereData.turbidity = m_skyParams.turbidity;
-        atmosphereData.mieBeta = m_skyParams.mieBeta * m_skyParams.mieCoeff;
-        atmosphereData.mieG = m_skyParams.mieG;
-        atmosphereData.groundColor = m_skyParams.groundColor;
-        atmosphereData.planetRadius = EARTH_RADIUS;
-        atmosphereData.sunColor = glm::vec3(1.0f, 0.98f, 0.9f);
-        atmosphereData.atmosphereRadius = ATMOSPHERE_RADIUS;
+		// Солнце и параметры рассеяния
+		atmosphereData.sunDirection = m_skyParams.sunDirection;
+		atmosphereData.sunIntensity = m_skyParams.sunIntensity;
+		atmosphereData.rayleighBeta = m_skyParams.rayleighBeta * m_skyParams.rayleighCoeff;
+		atmosphereData.mieBeta = m_skyParams.mieBeta * m_skyParams.mieCoeff;
+		atmosphereData.mieG = m_skyParams.mieG;
+		atmosphereData.turbidity = m_skyParams.turbidity;
 
-        m_atmosphereUBO->Upload(&atmosphereData, sizeof(atmosphereData));
+		// Радиусы планеты и атмосферы
+		atmosphereData.planetRadius = EARTH_RADIUS;
+		atmosphereData.atmosphereRadius = ATMOSPHERE_RADIUS;
+
+		// Время суток (можно нормализовать в диапазон 0–24 или перевести в секунды)
+		atmosphereData.time = m_skyParams.timeOfDay;
+
+		// Камера и экспозиция
+		atmosphereData.cameraPos = m_currentCameraPos;
+		atmosphereData.exposure = m_skyParams.exposure;
+
+		// Загрузка в UBO
+		m_atmosphereUBO->Upload(&atmosphereData, sizeof(atmosphereData));
+
 
         // Update cloud UBO
-        struct CloudUBO {
-            float cloudAltitude;
-            float cloudThickness;
-            float cloudDensity;
-            float cloudAbsorption;
-            glm::vec3 cloudColor;
-            float cloudLacunarity;
-            glm::vec3 cloudScatterColor;
-            float cloudGain;
-            int cloudOctaves;
-            float cloudAnimSpeed;
-            float cloudDetailScale;
-            float cloudDetailStrength;
-        } cloudData;
+		CloudUBO cloudData{};
 
-        cloudData.cloudAltitude = m_skyParams.cloudAltitude;
-        cloudData.cloudThickness = m_skyParams.cloudThickness;
-        cloudData.cloudDensity = m_skyParams.cloudDensity;
-        cloudData.cloudAbsorption = 0.5f;
-        cloudData.cloudColor = glm::vec3(1.0f);
-        cloudData.cloudLacunarity = m_skyParams.cloudLacunarity;
-        cloudData.cloudScatterColor = glm::vec3(0.8f, 0.9f, 1.0f);
-        cloudData.cloudGain = m_skyParams.cloudGain;
-        cloudData.cloudOctaves = m_skyParams.cloudOctaves;
-        cloudData.cloudAnimSpeed = m_skyParams.cloudSpeed;
-        cloudData.cloudDetailScale = 2.0f;
-        cloudData.cloudDetailStrength = 0.3f;
+		cloudData.coverage = glm::vec3(m_skyParams.cloudCoverage);
+		cloudData.speed = m_skyParams.cloudSpeed;
 
-        m_cloudUBO->Upload(&cloudData, sizeof(cloudData));
+		cloudData.windDirection = glm::vec3(1.0f, 0.0f, 0.0f); 
+		cloudData.scale = m_skyParams.cloudScale;
+
+		cloudData.density = m_skyParams.cloudDensity;
+		cloudData.altitude = m_skyParams.cloudAltitude;
+		cloudData.thickness = m_skyParams.cloudThickness;
+		cloudData.time = m_skyParams.timeOfDay; // или глобальное время, если нужно
+
+		cloudData.octaves = m_skyParams.cloudOctaves;
+		cloudData.lacunarity = m_skyParams.cloudLacunarity;
+		cloudData.gain = m_skyParams.cloudGain;
+		cloudData._pad = 0.0f;
+
+		m_cloudUBO->Upload(&cloudData, sizeof(cloudData));
     }
 
     void SkyRenderer::GenerateAtmosphereLUT(VkCommandBuffer cmd) {
@@ -1151,11 +1316,7 @@ namespace Renderer {
     }
 
     void SkyRenderer::GenerateCloudNoise(VkCommandBuffer cmd) {
-        auto settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
-
-		if (settings.cloudResolution > 128) {
-			settings.cloudResolution = 128;
-		}
+        const uint32_t CLOUD_NOISE_RESOLUTION = 128;
 
         // Bind compute pipeline
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_cloudNoisePipeline->GetPipeline());
@@ -1167,10 +1328,10 @@ namespace Renderer {
 
         // Обновляем push constants
         CloudNoisePushConstants pushConstants{};
-        pushConstants.octaves = settings.cloudOctaves;    // Или ваши значения
+        pushConstants.octaves = m_skyParams.cloudOctaves;    // Или ваши значения
         pushConstants.lacunarity = 2.0f;
         pushConstants.gain = 0.5f;
-        pushConstants.scale = static_cast<float>(settings.cloudResolution);      // Например, из настроек качества
+        pushConstants.scale = static_cast<float>(CLOUD_NOISE_RESOLUTION);      // Например, из настроек качества
 
         vkCmdPushConstants(
             cmd,
@@ -1182,9 +1343,9 @@ namespace Renderer {
         );
 
         // Dispatch for 3D texture
-        uint32_t groupCountX = (settings.cloudResolution + 7) / 8;
-        uint32_t groupCountY = (settings.cloudResolution + 7) / 8;
-        uint32_t groupCountZ = (settings.cloudResolution / 4 + 7) / 8;
+        uint32_t groupCountX = (CLOUD_NOISE_RESOLUTION + 7) / 8;
+        uint32_t groupCountY = (CLOUD_NOISE_RESOLUTION + 7) / 8;
+        uint32_t groupCountZ = (CLOUD_NOISE_RESOLUTION / 4 + 7) / 8;
         vkCmdDispatch(cmd, groupCountX, groupCountY, groupCountZ);
 
         // Transition to shader read
@@ -1217,7 +1378,7 @@ namespace Renderer {
     }
 
     void SkyRenderer::GenerateStarTexture(VkCommandBuffer cmd) {
-        const auto& settings = g_qualityPresets[static_cast<int>(m_qualityProfile)];
+        const uint32_t STAR_RESOLUTION = 2048;
 
         // Generate procedural star field
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_starGeneratorPipeline->GetPipeline());
@@ -1225,7 +1386,7 @@ namespace Renderer {
             m_starGeneratorPipeline->GetLayout(), 
             0, 1, &m_starGeneratorDescSet, 0, nullptr);
 
-        uint32_t groupCount = (settings.starResolution + 7) / 8;
+        uint32_t groupCount = (STAR_RESOLUTION + 7) / 8;
         vkCmdDispatch(cmd, groupCount, groupCount, 1);
 
         // Transition to shader read
@@ -1436,6 +1597,83 @@ namespace Renderer {
             throw std::runtime_error("Failed to create stars pipeline");
         }
     }
+
+	void SkyRenderer::CreateSunTexturePipeline() {
+		RHI::Vulkan::ComputePipelineCreateInfo info{};
+		info.shaderProgramName = "SunTexture";
+
+		VkDescriptorSetLayoutBinding binding{};
+		binding.binding = 0;
+		binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		binding.descriptorCount = 1;
+		binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		VkDescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &binding;
+
+		if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr,
+			&m_sunTextureDescSetLayout) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to create sun texture descriptor set layout");
+		}
+
+		info.descriptorSetLayout = m_sunTextureDescSetLayout;
+
+		m_sunTexturePipeline = std::make_unique<RHI::Vulkan::ComputePipeline>(m_device, m_shaderManager);
+		if (!m_sunTexturePipeline->Create(info)) {
+			throw std::runtime_error("Failed to create sun texture compute pipeline");
+		}
+	}
+
+	void SkyRenderer::CreateSunBillboardPipeline() {
+		// Descriptor set layout: binding 0 = sun texture sampler
+		VkDescriptorSetLayoutBinding binding{};
+		binding.binding = 0;
+		binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		binding.descriptorCount = 1;
+		binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		VkDescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &binding;
+
+		if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr,
+			&m_sunBillboardDescSetLayout) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to create sun billboard descriptor set layout");
+		}
+
+		// Push constants
+		VkPushConstantRange pushConstant{};
+		pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+		pushConstant.offset = 0;
+		pushConstant.size = sizeof(glm::mat4) + sizeof(glm::vec3) + sizeof(float) +
+			sizeof(glm::vec3) + sizeof(float); // viewProj + sunDir + sunSize + cameraPos + intensity
+
+		// Pipeline info
+		auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(
+			"SunBillboard",
+			VK_FORMAT_R16G16B16A16_SFLOAT,
+			&m_sunBillboardDescSetLayout,
+			1,
+			true, // Enable blending
+			VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, // Additive blending
+			VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD
+		);
+
+		info.pushConstants.push_back(pushConstant);
+		info.depthFormat = m_depthFormat;
+		info.depthTestEnable = false;
+		info.depthWriteEnable = false;
+		info.cullMode = VK_CULL_MODE_NONE;
+		info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+		m_sunBillboardPipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
+		if (!m_sunBillboardPipeline->Create(info)) {
+			throw std::runtime_error("Failed to create sun billboard pipeline");
+		}
+	}
 
     void SkyRenderer::CreatePostProcessPipeline() {
         std::vector<VkDescriptorSetLayoutBinding> bindings(3);
@@ -1911,6 +2149,49 @@ namespace Renderer {
         vkUpdateDescriptorSets(m_device->GetDevice(),
             static_cast<uint32_t>(postWrites.size()),
             postWrites.data(), 0, nullptr);
+
+
+		// Allocate sun texture descriptor set
+		allocInfo.pSetLayouts = &m_sunTextureDescSetLayout;
+		if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_sunTextureDescSet) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to allocate sun texture descriptor set");
+		}
+
+		VkDescriptorImageInfo sunTexImageInfo{};
+		sunTexImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		sunTexImageInfo.imageView = m_sunBillboardTexture->GetView();
+		sunTexImageInfo.sampler = VK_NULL_HANDLE;
+
+		VkWriteDescriptorSet sunTexWrite{};
+		sunTexWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		sunTexWrite.dstSet = m_sunTextureDescSet;
+		sunTexWrite.dstBinding = 0;
+		sunTexWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		sunTexWrite.descriptorCount = 1;
+		sunTexWrite.pImageInfo = &sunTexImageInfo;
+
+		vkUpdateDescriptorSets(m_device->GetDevice(), 1, &sunTexWrite, 0, nullptr);
+
+		// Allocate sun billboard descriptor set
+		allocInfo.pSetLayouts = &m_sunBillboardDescSetLayout;
+		if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &m_sunBillboardDescSet) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to allocate sun billboard descriptor set");
+		}
+
+		VkDescriptorImageInfo sunBillboardImageInfo{};
+		sunBillboardImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		sunBillboardImageInfo.imageView = m_sunBillboardTexture->GetView();
+		sunBillboardImageInfo.sampler = m_linearSampler;
+
+		VkWriteDescriptorSet sunBillboardWrite{};
+		sunBillboardWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		sunBillboardWrite.dstSet = m_sunBillboardDescSet;
+		sunBillboardWrite.dstBinding = 0;
+		sunBillboardWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		sunBillboardWrite.descriptorCount = 1;
+		sunBillboardWrite.pImageInfo = &sunBillboardImageInfo;
+
+		vkUpdateDescriptorSets(m_device->GetDevice(), 1, &sunBillboardWrite, 0, nullptr);
     }
 
 	void SkyRenderer::InitializeRenderTargetLayouts() {

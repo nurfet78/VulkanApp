@@ -35,11 +35,12 @@ namespace vkinit {
 namespace Renderer {
 
 	// Constants for atmosphere simulation
-	constexpr float EARTH_RADIUS = 6371000.0f;        // Earth radius in meters
-	constexpr float ATMOSPHERE_RADIUS = 6471000.0f;   // Atmosphere outer radius
-	constexpr float ATMOSPHERE_HEIGHT = 100000.0f;    // 100km atmosphere height
+	constexpr float EARTH_RADIUS = 6371000.0f;      // 6371 км в метрах
+	constexpr float ATMOSPHERE_RADIUS = 6471000.0f; // +100 км атмосфера
+	constexpr float ATMOSPHERE_HEIGHT = 100000.0f;  // 100 км
 	constexpr float SUN_ANGULAR_RADIUS = 0.00465f;    // Sun's angular radius
 	constexpr float MOON_ANGULAR_RADIUS = 0.00257f;   // Moon's angular radius
+
 
     // Sky quality profiles for performance scaling
     enum class SkyQualityProfile {
@@ -54,13 +55,13 @@ namespace Renderer {
         // Time and sun/moon
         float timeOfDay = 12.0f;              // 0-24 hours
         glm::vec3 sunDirection = glm::vec3(0, 1, 0);
-        float sunIntensity = 1.0f;
+        float sunIntensity = 15.0f;
         float sunAngularRadius = 0.00465f;    // Sun's angular radius in radians
 
         // Atmosphere
         float turbidity = 2.0f;                // Atmospheric turbidity (1-10)
-        float rayleighCoeff = 1.0f;           // Rayleigh scattering multiplier
-        float mieCoeff = 1.0f;                // Mie scattering multiplier
+        float rayleighCoeff = 0.8f;           // Rayleigh scattering multiplier
+        float mieCoeff = 0.6f;                // Mie scattering multiplier
         float mieG = 0.76f;                   // Mie phase function g parameter
         glm::vec3 rayleighBeta = glm::vec3(5.8e-6f, 13.5e-6f, 33.1e-6f);
         glm::vec3 mieBeta = glm::vec3(21e-6f);
@@ -82,7 +83,7 @@ namespace Renderer {
         float milkyWayIntensity = 1.0f;       // Milky way visibility
 
         // Post-processing
-        float exposure = 1.0f;                // HDR exposure
+        float exposure = 1.5f;                // HDR exposure
         float bloomThreshold = 1.0f;          // Bloom threshold
         float bloomIntensity = 0.5f;          // Bloom strength
 
@@ -118,33 +119,40 @@ namespace Renderer {
     };
 
     struct AtmosphereUBO {
-        glm::vec3 sunDirection;
-        float sunIntensity;
-        glm::vec3 rayleighBeta;
-        float mieCoeff;
-        glm::vec3 mieBeta;
-        float mieG;
-        float turbidity;
-        float planetRadius;
-        float atmosphereRadius;
-        float time;
-        glm::vec3 cameraPos;
-        float exposure;
+		alignas(16) glm::vec3 sunDirection;
+		float sunIntensity;
+
+		alignas(16) glm::vec3 rayleighBeta;
+		float mieCoeff;
+
+		alignas(16) glm::vec3 mieBeta;
+		float mieG;
+
+		float turbidity;
+		float planetRadius;
+		float atmosphereRadius;
+		float time;
+
+		alignas(16) glm::vec3 cameraPos;
+		float exposure;
     };
 
     struct CloudUBO {
-        glm::vec3 coverage;
-        float speed;
-        glm::vec3 windDirection;
-        float scale;
-        float density;
-        float altitude;
-        float thickness;
-        float time;
-        int octaves;
-        float lacunarity;
-        float gain;
-        float _pad; // padding для выравнивания до 16 байт
+		alignas(16) glm::vec3 coverage;      // vec3 coverage
+		float speed;                         // float speed
+
+		alignas(16) glm::vec3 windDirection; // vec3 windDirection
+		float scale;                         // float scale
+
+		float density;                       // float density
+		float altitude;                      // float altitude
+		float thickness;                     // float thickness
+		float time;                          // float time
+
+		int octaves;                         // int octaves
+		float lacunarity;                    // float lacunarity
+		float gain;                          // float gain
+		float _pad;                          // padding для выравнивания до 16 байт
     };
 
     struct StarUBO {
@@ -191,6 +199,7 @@ namespace Renderer {
         SkyRenderer(RHI::Vulkan::Device* device,
             Core::CoreContext* context,
             RHI::Vulkan::ShaderManager* shaderManager,
+            VkExtent2D currentExtent,
             VkFormat colorFormat,
             VkFormat depthFormat);
         ~SkyRenderer();
@@ -246,6 +255,8 @@ namespace Renderer {
         void CreateAtmospherePipeline();
         void CreateCloudPipeline();
         void CreateStarsPipeline();
+        void CreateSunTexturePipeline();
+        void CreateSunBillboardPipeline();
         void CreatePostProcessPipeline();
 
         void CreateComputePipelines();
@@ -256,12 +267,14 @@ namespace Renderer {
         // Resource creation
         void CreateUniformBuffers();
         void CreateTextures();
+        void GenerateSunTexture(VkCommandBuffer cmd);
         void CreateDescriptorSets();
         void CreateRenderTargets();
         void CreateLUTs();
 
         // Rendering passes
         void RenderAtmosphere(VkCommandBuffer cmd);
+        void RenderSunBillboard(VkCommandBuffer cmd);
         void RenderClouds(VkCommandBuffer cmd);
         void RenderStars(VkCommandBuffer cmd);
         void RenderMoon(VkCommandBuffer cmd);
@@ -316,6 +329,7 @@ namespace Renderer {
 
         // Pipelines
         std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_atmospherePipeline;
+        std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_sunBillboardPipeline;
         std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_cloudPipeline;
         std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_starsPipeline;
         std::unique_ptr<RHI::Vulkan::ReloadablePipeline> m_moonPipeline;
@@ -325,6 +339,7 @@ namespace Renderer {
         std::unique_ptr<RHI::Vulkan::ComputePipeline> m_atmosphereLUTPipeline;
         std::unique_ptr<RHI::Vulkan::ComputePipeline> m_cloudNoisePipeline;
         std::unique_ptr<RHI::Vulkan::ComputePipeline> m_starGeneratorPipeline;
+        std::unique_ptr<RHI::Vulkan::ComputePipeline> m_sunTexturePipeline;
 
         // Uniform buffers
         std::unique_ptr<RHI::Vulkan::Buffer> m_atmosphereUBO;
@@ -341,6 +356,7 @@ namespace Renderer {
         std::unique_ptr<RHI::Vulkan::Image> m_starTexture;          // Procedural stars
         std::unique_ptr<RHI::Vulkan::Image> m_milkyWayTexture;      // Milky way texture
         std::unique_ptr<RHI::Vulkan::Image> m_moonTexture;          // Moon surface
+        std::unique_ptr<RHI::Vulkan::Image> m_sunBillboardTexture;
 
         // Render targets
         std::unique_ptr<RHI::Vulkan::Image> m_skyBuffer;            // HDR sky buffer
@@ -374,6 +390,12 @@ namespace Renderer {
         VkDescriptorSet m_cloudDescSet = VK_NULL_HANDLE;
         VkDescriptorSet m_starsDescSet = VK_NULL_HANDLE;
         VkDescriptorSet m_postProcessDescSet = VK_NULL_HANDLE;
+
+		VkDescriptorSetLayout m_sunTextureDescSetLayout = VK_NULL_HANDLE;
+		VkDescriptorSet m_sunTextureDescSet = VK_NULL_HANDLE;
+
+		VkDescriptorSetLayout m_sunBillboardDescSetLayout = VK_NULL_HANDLE;
+		VkDescriptorSet m_sunBillboardDescSet = VK_NULL_HANDLE;
 
         // Samplers
         VkSampler m_linearSampler = VK_NULL_HANDLE;

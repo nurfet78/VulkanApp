@@ -418,13 +418,16 @@ namespace Renderer {
 			float sunSize;
 			glm::vec3 cameraPos;
 			float intensity;
+			float aspectRatio; 
+			float padding[3];
 		} push;
 
 		push.viewProj = m_currentProjection * m_currentView;
 		push.sunDirection = m_skyParams.sunDirection;
 		push.sunSize = 0.05f; // Billboard size in NDC
 		push.cameraPos = m_currentCameraPos;
-		push.intensity = m_skyParams.sunIntensity;
+		push.intensity = m_skyParams.sunIntensity * 100.0f;
+        push.aspectRatio = (float)m_currentExtent.width / (float)m_currentExtent.height;
 
 		vkCmdPushConstants(cmd, m_sunBillboardPipeline->GetLayout(),
 			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1082,6 +1085,9 @@ namespace Renderer {
     }
 
 	void SkyRenderer::GenerateSunTexture(VkCommandBuffer cmd) {
+
+        printf("Generating sun texture...\n");
+
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sunTexturePipeline->GetPipeline());
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
 			m_sunTexturePipeline->GetLayout(),
@@ -1648,8 +1654,13 @@ namespace Renderer {
 		VkPushConstantRange pushConstant{};
 		pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 		pushConstant.offset = 0;
-		pushConstant.size = sizeof(glm::mat4) + sizeof(glm::vec3) + sizeof(float) +
-			sizeof(glm::vec3) + sizeof(float); // viewProj + sunDir + sunSize + cameraPos + intensity
+		pushConstant.size = sizeof(glm::mat4) +      // viewProj: 64 bytes
+			sizeof(glm::vec3) +       // sunDirection: 12 bytes
+			sizeof(float) +           // sunSize: 4 bytes
+			sizeof(glm::vec3) +       // cameraPos: 12 bytes
+			sizeof(float) +           // intensity: 4 bytes
+			sizeof(float) +           // aspectRatio: 4 bytes
+			sizeof(float) * 3;        // padding: 12 bytes
 
 		// Pipeline info
 		auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(

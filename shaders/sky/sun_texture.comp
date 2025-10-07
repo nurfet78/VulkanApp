@@ -72,5 +72,5 @@ void main() {
         corona = pow(1.0 - coronaDist, 3.0) * 0.5;
     }
     
-    imageStore(outImage, texCoord, vec4(color * brightness, brightness + corona));
+    imageStore(outImage, texCoord, vec4(color * brightness * 5.0, brightness + corona));
 }

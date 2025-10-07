@@ -11,14 +11,15 @@ layout(push_constant) uniform PushConstants {
     float sunSize;
     vec3 cameraPos;
     float intensity;
+    float aspectRatio;
 } push;
 
 void main() {
+    // Sample sun texture
     vec4 sunColor = texture(sunTexture, inUV);
     
     // Apply intensity
-    sunColor.rgb *= push.intensity;
+    sunColor.rgb *= push.intensity * 0.01; // ”множитель дл€ контрол€ €ркости
     
-    // Output with alpha for additive blending
     fragColor = sunColor;
 }

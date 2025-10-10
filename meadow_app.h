@@ -29,6 +29,7 @@ namespace Core {
 
 namespace Scene {
     class Camera;
+    class CameraController;
     class Transform;
     class Light;
 }
@@ -69,9 +70,6 @@ private:
     void LoadShaders();
 
     void Update();
-    void UpdateCamera();
-
-    void HandleSkyControls();
 
     GLFWwindow* m_window = nullptr;
 
@@ -89,6 +87,8 @@ private:
     std::unique_ptr<Renderer::SkyRenderer> m_skyRenderer;
     std::unique_ptr<RHI::Vulkan::Image> m_depthBuffer;
     std::unique_ptr<Scene::Camera> m_camera;
+    std::unique_ptr<Scene::Transform> m_cameraTransform;
+    std::unique_ptr<Scene::CameraController> m_cameraController;
     std::unique_ptr<Scene::Transform> m_cubeTransform;
 
     // Источники света
@@ -97,11 +97,6 @@ private:
 
     std::unique_ptr<Scene::Light> m_pointLight;    // Точечный свет
     std::unique_ptr<Scene::Transform> m_pointLightTransform;
-
-    // Camera control variables
-    glm::vec3 m_cameraPos{ 5.0f, 3.0f, 5.0f };  // Initial camera position
-    float m_cameraRotationX = 0.0f;
-    float m_cameraRotationY = 0.0f;
 
     // Время
     float m_deltaTime = 0.0f;

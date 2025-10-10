@@ -82,9 +82,6 @@ void MeadowApp::OnInitialize() {
         m_swapchain->GetFormat()
     ); 
 
-	m_cameraRotationX = 0.3f;  // ~17 градусов вверх
-	m_cameraRotationY = 0.5f;  // ~29 градусов вбок
-
     // 8. Initialize scene
     InitializeScene();
 
@@ -110,7 +107,7 @@ void MeadowApp::OnInitialize() {
     );
 
 	Renderer::SkyParams params;
-	params.timeOfDay = 12.0f;  // 2 PM
+	//params.timeOfDay = 12.0f;  // 2 PM
 	params.cloudCoverage = 0.5f;
 	params.turbidity = 2.0f;
 	m_skyRenderer->SetSkyParams(params);
@@ -134,10 +131,11 @@ void MeadowApp::OnInitialize() {
     });
 
     // Show controls
-    std::cout << "\n=== Controls ===" << std::endl;
-    std::cout << "F11    - Toggle fullscreen" << std::endl;
-    std::cout << "ESC    - Exit" << std::endl;
-    std::cout << "================" << std::endl;
+	std::cout << "\n=== Controls ===" << std::endl;
+	std::cout << "F11    - Toggle fullscreen" << std::endl;
+	std::cout << "TAB    - Switch camera mode (FreeFly / Orbit)" << std::endl;
+	std::cout << "ESC    - Exit" << std::endl;
+	std::cout << "================" << std::endl;
 
     std::cout << "\nVulkan Device: " << m_device->GetProperties().deviceName << std::endl;
     std::cout << "Swapchain Images: " << m_swapchain->GetImageCount() << " (Triple Buffering)" << std::endl;
@@ -159,7 +157,7 @@ void MeadowApp::DrowScene(VkCommandBuffer cmd, uint32_t imageIndex) {
 		m_swapchain->GetExtent(),
 		m_camera->GetProjectionMatrix(),
 		viewRotationOnly,
-		m_cameraPos
+        m_cameraTransform->GetPosition()
 	);
 
 	m_device->EndDebugLabel(cmd);
@@ -186,9 +184,6 @@ void MeadowApp::Update() {
         m_deltaTime = 0.05f; // clamp
     }
 
-    HandleSkyControls();
-    UpdateCamera();
-
 	// Update sky renderer
 	if (m_skyRenderer) {
 		m_skyRenderer->Update(m_deltaTime);
@@ -199,11 +194,10 @@ void MeadowApp::Update() {
     rotation += m_deltaTime * glm::radians(45.0f); // 45 degrees per second
     m_cubeTransform->SetRotationEuler(glm::vec3(rotation * 0.5f, rotation, rotation * 0.3f));
     // Update camera transform
-    Scene::Transform cameraTransform;
-    cameraTransform.SetPosition(m_cameraPos);
-    cameraTransform.LookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
-    m_camera->UpdateViewMatrix(cameraTransform);
+    m_cameraController->Update(m_deltaTime, m_window);
+
+    m_camera->UpdateViewMatrix(*m_cameraTransform);
 
     std::vector<Renderer::LightData> lights;
 
@@ -253,7 +247,7 @@ void MeadowApp::CollectLightData(float time) {
     m_cubeRenderer->UpdateUniforms(
         m_camera->GetViewMatrix(),
         m_camera->GetProjectionMatrix(),
-        m_cameraPos,
+        m_cameraTransform->GetPosition(),
         time,  // pass time for shader animation
         lights,
         glm::vec3(0.05f, 0.05f, 0.05f) // ambient
@@ -637,9 +631,18 @@ void MeadowApp::CreateDepthBuffer() {
 
 void MeadowApp::InitializeScene() {
     // Create camera
+	m_cameraTransform = std::make_unique<Scene::Transform>();
+	m_cameraTransform->SetPosition(glm::vec3(0.0f, 0.0f, 5.0f));
+    m_cameraTransform->LookAt(glm::vec3(0.0f, 0.0f, 0.0f));
+
     m_camera = std::make_unique<Scene::Camera>();
     float aspectRatio = static_cast<float>(GetWindow()->GetWidth()) / static_cast<float>(GetWindow()->GetHeight());
     m_camera->SetPerspective(60.0f, aspectRatio, 0.1f, 1000.0f);
+
+	m_cameraController = std::make_unique<Scene::CameraController>(m_cameraTransform.get());
+	m_cameraController->SetMode(Scene::CameraController::Mode::Orbit);
+	m_cameraController->SetOrbitTarget(glm::vec3(0.0f, 0.0f, 0.0f));
+	m_cameraController->SetOrbitDistance(5.0f);
 
     // Create cube transform
     m_cubeTransform = std::make_unique<Scene::Transform>();
@@ -751,85 +754,4 @@ void MeadowApp::DrawFrame() {
     }
     
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-}
-
-void MeadowApp::UpdateCamera() {
-    // Rotation with mouse (hold left button)
-    if (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-        double xpos, ypos;
-        glfwGetCursorPos(m_window, &xpos, &ypos);
-
-        static double lastX = xpos, lastY = ypos;
-        static bool firstMouse = true;
-
-        if (firstMouse) {
-            lastX = xpos;
-            lastY = ypos;
-            firstMouse = false;
-        }
-
-        double deltaX = xpos - lastX;
-        double deltaY = ypos - lastY;
-
-        m_cameraRotationY += static_cast<float>(deltaX * 0.01f);
-        m_cameraRotationX += static_cast<float>(deltaY * 0.01f);
-        m_cameraRotationX = glm::clamp(m_cameraRotationX, -1.5f, 1.5f);
-
-        lastX = xpos;
-        lastY = ypos;
-    }
-
-    // Update camera position based on rotation
-    float distance = 5.0f;
-    m_cameraPos.x = distance * sin(m_cameraRotationY) * cos(m_cameraRotationX);
-    m_cameraPos.y = distance * sin(m_cameraRotationX);
-    m_cameraPos.z = distance * cos(m_cameraRotationY) * cos(m_cameraRotationX);
-}
-
-void MeadowApp::HandleSkyControls() {
-    //using namespace Core;
-    //// Example: keyboard controls for sky parameters
-    //if (Core::Input::IsKeyPressed(GLFW_KEY_1)) {
-    //    m_skyRenderer->SetTimeOfDay(6.0f);  // Sunrise
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_2)) {
-    //    m_skyRenderer->SetTimeOfDay(12.0f); // Noon
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_3)) {
-    //    m_skyRenderer->SetTimeOfDay(18.0f); // Sunset
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_4)) {
-    //    m_skyRenderer->SetTimeOfDay(0.0f);  // Midnight
-    //}
-
-    //// Cloud control
-    //if (Input::IsKeyPressed(GLFW_KEY_C)) {
-    //    auto params = m_skyRenderer->GetSkyParams();
-    //    params.cloudCoverage = std::min(1.0f, params.cloudCoverage + 0.1f);
-    //    m_skyRenderer->SetSkyParams(params);
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_V)) {
-    //    auto params = m_skyRenderer->GetSkyParams();
-    //    params.cloudCoverage = std::max(0.0f, params.cloudCoverage - 0.1f);
-    //    m_skyRenderer->SetSkyParams(params);
-    //}
-
-    //// Quality presets
-    //if (Input::IsKeyPressed(GLFW_KEY_F1)) {
-    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::Low);
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_F2)) {
-    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::Medium);
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_F3)) {
-    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::High);
-    //}
-    //if (Input::IsKeyPressed(GLFW_KEY_F4)) {
-    //    m_skyRenderer->SetQualityProfile(Renderer::SkyQualityProfile::Ultra);
-    //}
-
-    //// Animation control
-    //if (Input::IsKeyPressed(GLFW_KEY_SPACE)) {
-    //    m_skyRenderer->SetAutoAnimate(!m_skyRenderer->GetAutoAnimate());
-    //}
 }

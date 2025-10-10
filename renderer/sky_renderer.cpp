@@ -65,7 +65,8 @@ namespace Renderer {
         CreateDescriptorSets();
 
         // Initial setup
-        SetTimeOfDay(12.0f);
+       /* float t1 = TimeStringToFloat("23:30");
+        SetTimeOfDay(TimeStringToFloat("12:00"));*/
         UpdateAtmosphere();
 
         m_needsCloudGeneration = true;
@@ -369,7 +370,7 @@ namespace Renderer {
     }
 
 	void SkyRenderer::RenderSunBillboard(VkCommandBuffer cmd) {
-		// Transition sky buffer back to color attachment
+		// Transition sky buffer to attachment
 		{
 			VkImageMemoryBarrier2 toAttachment{};
 			toAttachment.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -395,7 +396,7 @@ namespace Renderer {
 		colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 		colorAttachment.imageView = m_skyBuffer->GetView();
 		colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // Keep existing content
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
 		VkRenderingInfo renderInfo{};
@@ -407,6 +408,21 @@ namespace Renderer {
 
 		vkCmdBeginRendering(cmd, &renderInfo);
 
+		// Set viewport and scissor
+		VkViewport viewport{};
+		viewport.x = 0.0f;
+		viewport.y = 0.0f;
+		viewport.width = (float)m_currentExtent.width;
+		viewport.height = (float)m_currentExtent.height;
+		viewport.minDepth = 0.0f;
+		viewport.maxDepth = 1.0f;
+		vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+		VkRect2D scissor{};
+		scissor.offset = { 0, 0 };
+		scissor.extent = m_currentExtent;
+		vkCmdSetScissor(cmd, 0, 1, &scissor);
+
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_sunBillboardPipeline->GetPipeline());
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
 			m_sunBillboardPipeline->GetLayout(),
@@ -414,26 +430,23 @@ namespace Renderer {
 
 		struct PushConstants {
 			glm::mat4 viewProj;
-			glm::vec3 sunDirection;
 			float sunSize;
+			float padding1[3];
 			glm::vec3 cameraPos;
-			float intensity;
-			float aspectRatio; 
-			float padding[3];
+			float aspectRatio;
+			float padding2[3];
 		} push;
 
 		push.viewProj = m_currentProjection * m_currentView;
-		push.sunDirection = m_skyParams.sunDirection;
-		push.sunSize = 0.05f; // Billboard size in NDC
+		push.sunSize = 0.08f; // Размер в "мировых единицах" (относительный)
 		push.cameraPos = m_currentCameraPos;
-		push.intensity = m_skyParams.sunIntensity * 100.0f;
-        push.aspectRatio = (float)m_currentExtent.width / (float)m_currentExtent.height;
+		push.aspectRatio = (float)m_currentExtent.width / (float)m_currentExtent.height;
 
 		vkCmdPushConstants(cmd, m_sunBillboardPipeline->GetLayout(),
 			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 			0, sizeof(push), &push);
 
-		vkCmdDraw(cmd, 6, 1, 0, 0); // 6 vertices for 2 triangles (fullscreen quad)
+		vkCmdDraw(cmd, 6, 1, 0, 0);
 
 		vkCmdEndRendering(cmd);
 
@@ -699,7 +712,7 @@ namespace Renderer {
 
             // Update time of day
             float hoursPerSecond = 0.5f * m_animationSpeed;
-            SetTimeOfDay(fmod(m_skyParams.timeOfDay + deltaTime * hoursPerSecond, 24.0f));
+            //SetTimeOfDay(fmod(m_skyParams.timeOfDay + deltaTime * hoursPerSecond, 24.0f));
         }
 
         // Update cloud animation
@@ -711,39 +724,54 @@ namespace Renderer {
 
     void SkyRenderer::SetTimeOfDay(float hours) {
         m_skyParams.timeOfDay = fmod(hours, 24.0f);
+
+        printf("SetTimeOfDay: %.2f hours\n", m_skyParams.timeOfDay);
+
         UpdateSunMoonPositions();
         UpdateAtmosphere();
+
+		printf("After update - Sun dir: (%.2f, %.2f, %.2f)\n",
+			m_skyParams.sunDirection.x,
+			m_skyParams.sunDirection.y,
+			m_skyParams.sunDirection.z);
     }
 
     void SkyRenderer::UpdateSunMoonPositions() {
-        // Simple sun position based on time of day
-        float sunAngle = static_cast<float>((m_skyParams.timeOfDay / 24.0f) * 2.0f * std::numbers::pi - std::numbers::pi / 2.0f);
+		// Положение солнца: Y = вверх
+        float sunAngle = (m_skyParams.timeOfDay / 24.0f) * 2.0f * glm::pi<float>() - glm::half_pi<float>();
 
-        m_skyParams.sunDirection = glm::normalize(glm::vec3(
-            0.0f,
-            sin(sunAngle),
-            cos(sunAngle)
-        ));
+		float azimuth = glm::radians(-90.0f); // восток
+		float elevation = sunAngle;
 
-        // Adjust sun intensity based on position
-        float sunElevation = m_skyParams.sunDirection.y;
-        m_skyParams.sunIntensity = glm::max(0.0f, sunElevation) * 20.0f;
+		m_skyParams.sunDirection = glm::normalize(glm::vec3(
+			cos(elevation) * cos(azimuth),
+			sin(elevation),
+			cos(elevation) * sin(azimuth)
+		));
+
+		// Интенсивность солнца растет с высотой
+		float sunElevation = glm::max(m_skyParams.sunDirection.y, 0.0f);
+		m_skyParams.sunIntensity = sunElevation * 50.0f; // усиление для наглядности
     }
 
     void SkyRenderer::UpdateAtmosphere() {
-        // Update atmospheric parameters based on time of day
+  
         float sunElevation = m_skyParams.sunDirection.y;
 
-        // Adjust turbidity for sunset/sunrise
+        // Динамическая turbidity для sunrise/sunset
         if (abs(sunElevation) < 0.3f) {
-            m_skyParams.turbidity = glm::mix(2.0f, 5.0f, 1.0f - abs(sunElevation) / 0.3f);
+			m_skyParams.turbidity = glm::mix(2.0f, 6.0f, 1.0f - abs(sunElevation) / 0.3f);
+			m_skyParams.mieCoeff = glm::mix(1.2f, 2.5f, 1.0f - abs(sunElevation) / 0.3f);
         }
         else {
-            m_skyParams.turbidity = 2.0f;
+            // Полдень - чистое небо
+			m_skyParams.turbidity = 2.0f;
+            m_skyParams.mieCoeff = 1.2f;
         }
 
-        // Adjust Mie coefficient for sun glare
-        m_skyParams.mieCoeff = glm::mix(1.0f, 2.0f, glm::max(0.0f, 1.0f - abs(sunElevation)));
+		// Увеличиваем Mie коэффициент когда солнце низко для красивого ореола
+		float horizonFactor = 1.0f - abs(sunElevation);
+		m_skyParams.mieBeta = glm::vec3(21e-6f) * (1.0f + horizonFactor * 1.5f);
     }
 
     void SkyRenderer::SetQualityProfile(SkyQualityProfile profile) {
@@ -1249,7 +1277,6 @@ namespace Renderer {
     void SkyRenderer::UpdateUniformBuffers() {
         // Update atmosphere UBO
 		AtmosphereUBO atmosphereData{};
-
 		// Солнце и параметры рассеяния
 		atmosphereData.sunDirection = m_skyParams.sunDirection;
 		atmosphereData.sunIntensity = m_skyParams.sunIntensity;
@@ -1480,7 +1507,7 @@ namespace Renderer {
         info.pushConstants.push_back(pushConstant);
 
         // Сохраним info, чтобы можно было пересоздать позже при хот-релоаде
-        m_atmospherePipelineCreateInfo = info; // <-- добавь поле в SkyRenderer: ReloadablePipeline::CreateInfo m_atmospherePipelineCreateInfo;
+        m_atmospherePipelineCreateInfo = info; 
 
         // --- Создаём ReloadablePipeline ---
         m_atmospherePipeline = std::make_unique<RHI::Vulkan::ReloadablePipeline>(m_device, m_shaderManager);
@@ -1574,7 +1601,7 @@ namespace Renderer {
 
         // --- Push constants для звёзд (если нужны) ---
         VkPushConstantRange starsPushRange{};
-        starsPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // или vertex + fragment
+        starsPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT; // или vertex + fragment
         starsPushRange.offset = 0;
         starsPushRange.size = sizeof(StarsPushConstants); // структура push-constants для звёзд
 
@@ -1633,17 +1660,24 @@ namespace Renderer {
 	}
 
 	void SkyRenderer::CreateSunBillboardPipeline() {
-		// Descriptor set layout: binding 0 = sun texture sampler
-		VkDescriptorSetLayoutBinding binding{};
-		binding.binding = 0;
-		binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		binding.descriptorCount = 1;
-		binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		// Два binding: текстура + atmosphere UBO
+		std::vector<VkDescriptorSetLayoutBinding> bindings(2);
+
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		// Binding 1: atmosphere UBO (для sunDirection)
+		bindings[1].binding = 1;
+		bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
 		VkDescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		layoutInfo.bindingCount = 1;
-		layoutInfo.pBindings = &binding;
+		layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
 
 		if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr,
 			&m_sunBillboardDescSetLayout) != VK_SUCCESS) {
@@ -1654,28 +1688,21 @@ namespace Renderer {
 		VkPushConstantRange pushConstant{};
 		pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 		pushConstant.offset = 0;
-		pushConstant.size = sizeof(glm::mat4) +      // viewProj: 64 bytes
-			sizeof(glm::vec3) +       // sunDirection: 12 bytes
-			sizeof(float) +           // sunSize: 4 bytes
-			sizeof(glm::vec3) +       // cameraPos: 12 bytes
-			sizeof(float) +           // intensity: 4 bytes
-			sizeof(float) +           // aspectRatio: 4 bytes
-			sizeof(float) * 3;        // padding: 12 bytes
+		pushConstant.size = 128;
 
-		// Pipeline info
 		auto info = RHI::Vulkan::ReloadablePipeline::MakePipelineInfo(
 			"SunBillboard",
 			VK_FORMAT_R16G16B16A16_SFLOAT,
 			&m_sunBillboardDescSetLayout,
 			1,
-			true, // Enable blending
-			VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, // Additive blending
+			true, // Blending enabled
+			VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
 			VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD
 		);
 
 		info.pushConstants.push_back(pushConstant);
 		info.depthFormat = m_depthFormat;
-		info.depthTestEnable = false;
+		info.depthTestEnable = false;  // Солнце всегда "за" всем
 		info.depthWriteEnable = false;
 		info.cullMode = VK_CULL_MODE_NONE;
 		info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -2189,20 +2216,37 @@ namespace Renderer {
 			throw std::runtime_error("Failed to allocate sun billboard descriptor set");
 		}
 
+        std::vector<VkWriteDescriptorSet> sunBillboardWrites(2);
+
+		// Texture
 		VkDescriptorImageInfo sunBillboardImageInfo{};
 		sunBillboardImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		sunBillboardImageInfo.imageView = m_sunBillboardTexture->GetView();
 		sunBillboardImageInfo.sampler = m_linearSampler;
 
-		VkWriteDescriptorSet sunBillboardWrite{};
-		sunBillboardWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		sunBillboardWrite.dstSet = m_sunBillboardDescSet;
-		sunBillboardWrite.dstBinding = 0;
-		sunBillboardWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		sunBillboardWrite.descriptorCount = 1;
-		sunBillboardWrite.pImageInfo = &sunBillboardImageInfo;
+		sunBillboardWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		sunBillboardWrites[0].dstSet = m_sunBillboardDescSet;
+		sunBillboardWrites[0].dstBinding = 0;
+		sunBillboardWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		sunBillboardWrites[0].descriptorCount = 1;
+		sunBillboardWrites[0].pImageInfo = &sunBillboardImageInfo;
 
-		vkUpdateDescriptorSets(m_device->GetDevice(), 1, &sunBillboardWrite, 0, nullptr);
+		// Atmosphere UBO
+		VkDescriptorBufferInfo atmosphereBufferInfo{};
+		atmosphereBufferInfo.buffer = m_atmosphereUBO->GetBuffer();
+		atmosphereBufferInfo.offset = 0;
+		atmosphereBufferInfo.range = sizeof(AtmosphereUBO);
+
+		sunBillboardWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		sunBillboardWrites[1].dstSet = m_sunBillboardDescSet;
+		sunBillboardWrites[1].dstBinding = 1;
+		sunBillboardWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		sunBillboardWrites[1].descriptorCount = 1;
+		sunBillboardWrites[1].pBufferInfo = &atmosphereBufferInfo;
+
+		vkUpdateDescriptorSets(m_device->GetDevice(),
+			static_cast<uint32_t>(sunBillboardWrites.size()),
+			sunBillboardWrites.data(), 0, nullptr);
     }
 
 	void SkyRenderer::InitializeRenderTargetLayouts() {
@@ -2510,4 +2554,17 @@ namespace Renderer {
         TransitionImageToLayout(cmd, m_transmittanceLUT->GetHandle(), VK_IMAGE_LAYOUT_GENERAL);
         // добавь остальные storage images по аналогии
     }
-} // namespace Renderer
+
+	float SkyRenderer::TimeStringToFloat(const std::string& timeStr) {
+		int hours = 0;
+		int minutes = 0;
+		char sep = ':';
+
+		std::istringstream ss(timeStr);
+		if (!(ss >> hours >> sep >> minutes) || sep != ':' || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+			throw std::invalid_argument("Invalid time format, expected HH:MM");
+		}
+
+		return hours + minutes / 60.0f;
+	}
+}

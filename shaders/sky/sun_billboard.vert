@@ -2,18 +2,32 @@
 
 layout(location = 0) out vec2 outUV;
 
+layout(location = 1) out vec3 debugSunDir; // DEBUG
+
+layout(set = 0, binding = 1) uniform AtmosphereUniforms {
+    vec3 sunDirection;
+    float sunIntensity;
+    vec3 rayleighBeta;
+    float mieCoeff;
+    vec3 mieBeta;
+    float mieG;
+    float turbidity;
+    float planetRadius;
+    float atmosphereRadius;
+    float time;
+    vec3 cameraPos;
+    float exposure;
+} atmosphere;
+
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
-    vec3 sunDirection;
     float sunSize;
     vec3 cameraPos;
-    float intensity;
     float aspectRatio;
 } push;
 
 void main() {
-    // Fullscreen triangle vertices
-    vec2 positions[6] = vec2[](
+    vec2 quadVertices[6] = vec2[](
         vec2(-1.0, -1.0),
         vec2( 1.0, -1.0),
         vec2( 1.0,  1.0),
@@ -22,24 +36,26 @@ void main() {
         vec2(-1.0,  1.0)
     );
     
-    vec2 pos = positions[gl_VertexIndex];
-    outUV = pos * 0.5 + 0.5;
+    vec2 localPos = quadVertices[gl_VertexIndex];
+    outUV = localPos * 0.5 + 0.5;
+    debugSunDir = atmosphere.sunDirection; // DEBUG
     
-    // Calculate sun position
-    vec3 sunWorldPos = push.cameraPos + push.sunDirection * 10000.0;
-    vec4 sunClipPos = push.viewProj * vec4(sunWorldPos, 1.0);
+    // ВАЖНО: проверяем что sunDirection не нулевой
+    vec3 sunDir = normalize(atmosphere.sunDirection);
     
-    // Cull if behind camera
-    if (sunClipPos.w <= 0.0) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // Outside clip space
-        return;
-    }
+    float sunDistance = 100000.0;
+    vec3 sunWorldPos = push.cameraPos + sunDir * sunDistance;
     
-    vec2 sunNDC = sunClipPos.xy / sunClipPos.w;
+    vec3 forward = normalize(push.cameraPos - sunWorldPos);
+    vec3 worldUp = vec3(0.0, 1.0, 0.0);
+    vec3 right = normalize(cross(worldUp, forward));
+    vec3 up = cross(forward, right);
     
-    // Apply aspect correction
-    vec2 correctedSize = push.sunSize * vec2(1.0 / push.aspectRatio, 1.0);
-    vec2 billboardPos = sunNDC + pos * correctedSize;
+    float billboardWorldSize = push.sunSize * sunDistance * 0.01;
     
-    gl_Position = vec4(billboardPos, 0.99999, 1.0);
+    vec3 vertexWorldPos = sunWorldPos 
+                        + right * localPos.x * billboardWorldSize
+                        + up * localPos.y * billboardWorldSize;
+    
+    gl_Position = push.viewProj * vec4(vertexWorldPos, 1.0);
 }

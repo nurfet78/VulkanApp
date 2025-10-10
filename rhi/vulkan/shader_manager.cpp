@@ -426,7 +426,7 @@ namespace RHI::Vulkan {
         info.depthWriteEnable = true;
         info.depthCompareOp = VK_COMPARE_OP_LESS;
         info.cullMode = cullMode;
-        info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        info.frontFace = VK_FRONT_FACE_CLOCKWISE;
         info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
         // Vertex input

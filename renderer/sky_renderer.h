@@ -16,7 +16,6 @@ namespace RHI::Vulkan {
 }
 
 namespace Core {
-    class Application;
     class CoreContext;
 }
 
@@ -61,10 +60,10 @@ namespace Renderer {
         // Atmosphere
         float turbidity = 2.0f;                // Atmospheric turbidity (1-10)
         float rayleighCoeff = 0.8f;           // Rayleigh scattering multiplier
-        float mieCoeff = 0.6f;                // Mie scattering multiplier
+        float mieCoeff = 0.8f;                // Mie scattering multiplier
         float mieG = 0.76f;                   // Mie phase function g parameter
-        glm::vec3 rayleighBeta = glm::vec3(5.8e-6f, 13.5e-6f, 33.1e-6f);
-        glm::vec3 mieBeta = glm::vec3(21e-6f);
+        glm::vec3 rayleighBeta = glm::vec3(5.8e-6f, 13.5e-6f, 33.1e-6f) * 0.4f;
+        glm::vec3 mieBeta = glm::vec3(21e-6f) * 0.8f;
 
         // Clouds
         float cloudCoverage = 0.5f;           // 0-1
@@ -83,7 +82,7 @@ namespace Renderer {
         float milkyWayIntensity = 1.0f;       // Milky way visibility
 
         // Post-processing
-        float exposure = 1.5f;                // HDR exposure
+        float exposure = 1.0f;                // HDR exposure
         float bloomThreshold = 1.0f;          // Bloom threshold
         float bloomIntensity = 0.5f;          // Bloom strength
 
@@ -311,6 +310,8 @@ namespace Renderer {
                 VMA_MEMORY_USAGE_CPU_TO_GPU
             );
         }
+
+        float TimeStringToFloat(const std::string& timeStr);
 
         void TransitionImageToLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout newLayout);
         void TransitionAllStorageImagesToGeneral(VkCommandBuffer cmd);

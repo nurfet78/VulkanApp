@@ -1,7 +1,8 @@
-// engine/scene/components.h
+﻿// engine/scene/components.h
 #pragma once
 
 #include "entity.h"
+#include "input.h"
 
 
 namespace Scene {
@@ -282,6 +283,171 @@ private:
     glm::mat4 m_viewMatrix{1.0f};
 };
 
+class CameraController {
+public:
+	enum class Mode { Orbit, FreeFly };
+
+	CameraController(Transform* transform)
+		: m_transform(transform) {
+	}
+
+	void SetMode(Mode mode) {
+		if (m_mode != mode) {
+			m_mode = mode;
+			OnModeChanged();
+		}
+	}
+
+	Mode GetMode() const { return m_mode; }
+
+	void SetOrbitTarget(const glm::vec3& target) { m_target = target; }
+	void SetOrbitDistance(float distance) { m_distance = distance; }
+
+	void Update(float deltaTime, GLFWwindow* window) {
+		// Переключение режима по TAB
+		if (Core::Input::IsKeyPressed(GLFW_KEY_TAB)) {
+			ToggleMode();
+		}
+
+		// Обновление в зависимости от режима
+		if (m_mode == Mode::FreeFly) {
+			UpdateFreeFly(deltaTime);
+		}
+		else {
+			UpdateOrbit(deltaTime);
+		}
+	}
+
+private:
+	Transform* m_transform = nullptr;
+	Mode m_mode = Mode::Orbit;
+
+	// Orbit параметры
+	glm::vec3 m_target{ 0.0f };
+	float m_distance = 5.0f;
+	float m_yaw = 0.0f;
+	float m_pitch = 0.0f;
+
+	// FreeFly параметры
+	float m_freeFlyYaw = 0.0f;
+	float m_freeFlyPitch = 0.0f;
+
+	// Настройки
+	float m_moveSpeed = 5.0f;
+	float m_mouseSensitivity = 0.1f;
+	float m_orbitSensitivity = 0.01f;
+
+	void ToggleMode() {
+		if (m_mode == Mode::Orbit) {
+			// Переход в FreeFly: сохраняем текущую ориентацию камеры
+			glm::vec3 forward = m_transform->GetForward();
+			// Правильная конвертация: forward указывает куда смотрит камера
+			m_freeFlyYaw = -glm::degrees(atan2(forward.x, forward.z));
+			m_freeFlyPitch = -glm::degrees(asin(forward.y));
+
+			m_mode = Mode::FreeFly;
+		}
+		else {
+			// Переход в Orbit: вычисляем углы относительно цели
+			glm::vec3 pos = m_transform->GetPosition();
+			glm::vec3 offset = pos - m_target;
+
+			m_distance = glm::length(offset);
+			if (m_distance < 0.01f) m_distance = 5.0f;
+
+			glm::vec3 dir = glm::normalize(offset);
+			m_yaw = atan2(dir.x, dir.z);
+			m_pitch = asin(dir.y);
+
+			m_mode = Mode::Orbit;
+		}
+
+		OnModeChanged();
+	}
+
+	void OnModeChanged() {
+		if (m_mode == Mode::FreeFly) {
+			// Захватываем курсор
+			Core::Input::SetCursorLocked(true);
+		}
+		else {
+			// Освобождаем курсор
+			Core::Input::SetCursorLocked(false);
+		}
+	}
+
+	void UpdateFreeFly(float dt) {
+		// Обработка движения WASD + QE
+		float velocity = m_moveSpeed * dt;
+		glm::vec3 pos = m_transform->GetPosition();
+
+		if (Core::Input::IsKeyDown(GLFW_KEY_W))
+			pos += m_transform->GetForward() * velocity;
+		if (Core::Input::IsKeyDown(GLFW_KEY_S))
+			pos -= m_transform->GetForward() * velocity;
+		if (Core::Input::IsKeyDown(GLFW_KEY_A))
+			pos -= m_transform->GetRight() * velocity;
+		if (Core::Input::IsKeyDown(GLFW_KEY_D))
+			pos += m_transform->GetRight() * velocity;
+		if (Core::Input::IsKeyDown(GLFW_KEY_Q))
+			pos.y -= velocity;
+		if (Core::Input::IsKeyDown(GLFW_KEY_E))
+			pos.y += velocity;
+
+		m_transform->SetPosition(pos);
+
+		// Обработка вращения мышью (курсор захвачен)
+		glm::vec2 delta = Core::Input::GetMouseDelta();
+
+		// Инвертируем управление: мышь вправо = камера вправо = объекты влево
+		m_freeFlyYaw -= delta.x * m_mouseSensitivity;
+		m_freeFlyPitch -= delta.y * m_mouseSensitivity;
+		m_freeFlyPitch = glm::clamp(m_freeFlyPitch, -89.0f, 89.0f);
+
+		// Применяем вращение
+		glm::quat rot = glm::quat(glm::vec3(
+			glm::radians(m_freeFlyPitch),
+			glm::radians(m_freeFlyYaw),
+			0.0f
+		));
+		m_transform->SetRotation(rot);
+	}
+
+	void UpdateOrbit(float dt) {
+		// Вращение только при зажатой ПКМ
+		if (Core::Input::IsMouseButtonDown(Core::MouseButton::Right)) {
+			glm::vec2 delta = Core::Input::GetMouseDelta();
+
+			m_yaw -= delta.x * m_orbitSensitivity;
+			m_pitch += delta.y * m_orbitSensitivity;
+			m_pitch = glm::clamp(m_pitch, -1.5f, 1.5f);
+		}
+
+		// Изменение дистанции колесом мыши
+		float scroll = Core::Input::GetScrollDelta();
+		if (scroll != 0.0f) {
+			m_distance -= scroll * 0.5f;
+			m_distance = glm::clamp(m_distance, 1.0f, 100.0f);
+		}
+
+		// Альтернативное управление дистанцией стрелками
+		if (Core::Input::IsKeyDown(GLFW_KEY_UP))
+			m_distance -= dt * 5.0f;
+		if (Core::Input::IsKeyDown(GLFW_KEY_DOWN))
+			m_distance += dt * 5.0f;
+		m_distance = glm::clamp(m_distance, 1.0f, 100.0f);
+
+		// Вычисляем позицию камеры на орбите
+		glm::vec3 pos;
+		pos.x = m_target.x + m_distance * sin(m_yaw) * cos(m_pitch);
+		pos.y = m_target.y + m_distance * sin(m_pitch);
+		pos.z = m_target.z + m_distance * cos(m_yaw) * cos(m_pitch);
+
+		m_transform->SetPosition(pos);
+		m_transform->LookAt(m_target);
+	}
+};
+
 // Light Component
 class Light : public Component {
 public:
@@ -291,13 +457,13 @@ public:
         Spot
     };
 
-    // ��������� enum ��� ����� ���������
+    // Добавляем enum для типов освещения
     enum class ShadingModel {
-        Lambert,        // ������� ��������� max(dot(N,L), 0)
-        HalfLambert,    // ������ ��������� (dot(N,L) * 0.5 + 0.5)^2
-        OrenNayar,      // ��� ����������� ������������
-        Minnaert,       // ��� ����������� ������������
-        Toon           // Cartoon-style ���������
+        Lambert,        // Обычное освещение max(dot(N,L), 0)
+        HalfLambert,    // Мягкое освещение (dot(N,L) * 0.5 + 0.5)^2
+        OrenNayar,      // Для шероховатых поверхностей
+        Minnaert,       // Для бархатистых поверхностей
+        Toon           // Cartoon-style освещение
     };
     
     Light() = default;
@@ -331,19 +497,19 @@ public:
     void SetShadowBias(float bias) { m_shadowBias = bias; }
     float GetShadowBias() const { return m_shadowBias; }
 
-    // === ����� ������ ��� shading model ===
+    // === НОВЫЕ МЕТОДЫ для shading model ===
     void SetShadingModel(ShadingModel model) { m_shadingModel = model; }
     ShadingModel GetShadingModel() const { return m_shadingModel; }
 
-    // ��������� ��� Half-Lambert
+    // Параметры для Half-Lambert
     void SetWrapFactor(float wrap) { m_wrapFactor = wrap; }
     float GetWrapFactor() const { return m_wrapFactor; }
 
-    // �������� ��� Toon shading (���������� �������)
+    // Параметр для Toon shading (количество уровней)
     void SetToonSteps(int steps) { m_toonSteps = steps; }
     int GetToonSteps() const { return m_toonSteps; }
 
-    // �������� �������� ��� ��������� �������
+    // Параметр мягкости для различных моделей
     void SetSoftness(float softness) { m_softness = softness; }
     float GetSoftness() const { return m_softness; }
 
@@ -359,9 +525,9 @@ private:
     float m_shadowBias = 0.005f;
 
     ShadingModel m_shadingModel = ShadingModel::Lambert;
-    float m_wrapFactor = 0.5f;      // ��� Half-Lambert: ��������� "������������" ���������
-    int m_toonSteps = 3;            // ��� Toon shading: ���������� �������� ���������
-    float m_softness = 1.0f;        // ����� �������� ��������
+    float m_wrapFactor = 0.5f;      // Для Half-Lambert: насколько "заворачивать" освещение
+    int m_toonSteps = 3;            // Для Toon shading: количество ступеней освещения
+    float m_softness = 1.0f;        // Общий параметр мягкости
 };
 
 // Tag Component for entity identification

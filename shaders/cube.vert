@@ -66,7 +66,6 @@ void main() {
     // Time
     fragTime = ubo.time;
     
-    // хяопюбкемн: Final position = Projection * View * World
+    // Final position = Projection * View * World
     gl_Position = ubo.projection * ubo.view * worldPos;
-    gl_Position.y = -gl_Position.y;
 }

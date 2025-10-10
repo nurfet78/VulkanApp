@@ -28,6 +28,7 @@ void Application::Run() {
         
         PollEvents();
         Update(m_time->GetDeltaTime());
+        m_input->Update();
         Render();
         
         m_jobSystem->Wait();
@@ -67,7 +68,7 @@ void Application::Shutdown() {
 
 void Application::PollEvents() {
     m_window->PollEvents();
-    m_input->Update();
+    //m_input->Update();
 }
 
 void Application::Update(float deltaTime) {

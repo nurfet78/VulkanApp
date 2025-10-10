@@ -144,11 +144,34 @@ void main() {
  }
  
     
-    vec3 finalColor = scattering;
+    // === солнечный ореол ===
+    float sunDot = dot(rayDir, atmosphere.sunDirection);
+    sunDot = clamp(sunDot, 0.0, 1.0);
+
+    // Масштаб от интенсивности солнца
+    float intensity = clamp(atmosphere.sunIntensity, 0.5, 5.0);
+    float glowScale = mix(0.7, 1.5, smoothstep(0.5, 5.0, intensity));
+    float haloStrength = mix(0.4, 1.0, smoothstep(0.5, 5.0, intensity));
+
+    // --- Центральное ядро ---
+    float core = smoothstep(0.985 - 0.002 * glowScale, 1.0, sunDot);
+    scattering += vec3(1.0, 0.97, 0.9) * pow(core, 3.0) * haloStrength;
+
+    // --- Средний ореол ---
+    float mid = smoothstep(0.9 - 0.03 * glowScale, 0.985, sunDot);
+    scattering += vec3(1.0, 0.94, 0.85) * pow(mid, 2.0) * haloStrength * 0.15;
+
+    // --- Дальний мягкий свет ---
+    float soft = smoothstep(0.7 - 0.05 * glowScale, 0.9, sunDot);
+    scattering += vec3(0.9, 0.95, 1.0) * pow(soft, 1.2) * haloStrength * 0.05;
+
+    // --- Атмосферное голубое рассеяние ---
+    float skyBlend = smoothstep(0.6, 0.85, sunDot);  // чем дальше от солнца — тем сильнее голубой оттенок
+    vec3 skyTint = mix(vec3(0.85, 0.95, 1.0), vec3(1.0, 0.97, 0.9), skyBlend);
+scattering = mix(scattering, scattering * skyTint, 0.4 * (1.0 - sunDot));
     
-    
-    // Tone mapping with slightly stronger response
-    finalColor = 1.0 - exp(-finalColor * atmosphere.exposure * 1.1);
+    // Tone mapping
+    vec3 finalColor = vec3(1.0) - exp(-scattering * atmosphere.exposure);
     
     fragColor = vec4(finalColor, 1.0);
 }

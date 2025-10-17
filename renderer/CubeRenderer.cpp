@@ -27,7 +27,7 @@ namespace Renderer {
 
 		m_materialSystem->CreateDefaultMaterials();
 
-		m_material = m_materialSystem->GetMaterial("gold");
+		m_material = m_materialSystem->GetMaterial("chrome");
 		
 		if (!m_material) {
 			throw std::runtime_error("Default material not found");
@@ -49,25 +49,53 @@ namespace Renderer {
 		if (!m_descriptorAllocator->Allocate(&m_descriptorSet, sceneLayout)) {
 			throw std::runtime_error("Failed to allocate scene descriptor set");
 		}
-		UpdateDescriptorSets();
+		//UpdateDescriptorSets();
 	}
 
 	void CubeRenderer::UpdateDescriptorSets() {
+		std::vector<VkWriteDescriptorSet> writes;
+
+		// Binding 0: Scene UBO
 		VkDescriptorBufferInfo bufferInfo{};
 		bufferInfo.buffer = m_uniformBuffer->GetHandle();
 		bufferInfo.offset = 0;
 		bufferInfo.range = sizeof(SceneUBO);
 
-		VkWriteDescriptorSet descriptorWrite{};
-		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		descriptorWrite.dstSet = m_descriptorSet;
-		descriptorWrite.dstBinding = 0;
-		descriptorWrite.dstArrayElement = 0;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.pBufferInfo = &bufferInfo;
+		VkWriteDescriptorSet uboWrite{};
+		uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		uboWrite.dstSet = m_descriptorSet;
+		uboWrite.dstBinding = 0;
+		uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		uboWrite.descriptorCount = 1;
+		uboWrite.pBufferInfo = &bufferInfo;
+		writes.push_back(uboWrite);
 
-		vkUpdateDescriptorSets(m_device->GetDevice(), 1, &descriptorWrite, 0, nullptr);
+		// Binding 1: Skybox cubemap
+		if (m_skyboxView != VK_NULL_HANDLE && m_skyboxSampler != VK_NULL_HANDLE) {
+			VkDescriptorImageInfo imageInfo{};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = m_skyboxView;
+			imageInfo.sampler = m_skyboxSampler;
+
+			VkWriteDescriptorSet imageWrite{};
+			imageWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			imageWrite.dstSet = m_descriptorSet;
+			imageWrite.dstBinding = 1;
+			imageWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			imageWrite.descriptorCount = 1;
+			imageWrite.pImageInfo = &imageInfo;
+			writes.push_back(imageWrite);
+		}
+
+		vkUpdateDescriptorSets(m_device->GetDevice(),
+			static_cast<uint32_t>(writes.size()),
+			writes.data(), 0, nullptr);
+	}
+
+	void CubeRenderer::SetSkyboxForIBL(VkImageView skyboxView, VkSampler skyboxSampler) {
+		m_skyboxView = skyboxView;
+		m_skyboxSampler = skyboxSampler;
+		UpdateDescriptorSets(); // Обновляем descriptor set
 	}
 
 	void CubeRenderer::UpdateUniforms(const glm::mat4& view, const glm::mat4& projection,

@@ -196,15 +196,25 @@ Image::Image(Device* device, const ImageDesc& desc)
 	viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 	viewInfo.image = m_image;
 
-	// Выбор правильного типа view
-	if (desc.imageType == VK_IMAGE_TYPE_2D) {
-		viewInfo.viewType = (desc.arrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+	// === Правильный выбор типа view ===
+	if (desc.flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) {
+		// Куб или массив кубов
+		viewInfo.viewType = (desc.arrayLayers == 6)
+			? VK_IMAGE_VIEW_TYPE_CUBE
+			: VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+	}
+	else if (desc.imageType == VK_IMAGE_TYPE_2D) {
+		viewInfo.viewType = (desc.arrayLayers > 1)
+			? VK_IMAGE_VIEW_TYPE_2D_ARRAY
+			: VK_IMAGE_VIEW_TYPE_2D;
 	}
 	else if (desc.imageType == VK_IMAGE_TYPE_3D) {
 		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
 	}
 	else if (desc.imageType == VK_IMAGE_TYPE_1D) {
-		viewInfo.viewType = (desc.arrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+		viewInfo.viewType = (desc.arrayLayers > 1)
+			? VK_IMAGE_VIEW_TYPE_1D_ARRAY
+			: VK_IMAGE_VIEW_TYPE_1D;
 	}
 
 	viewInfo.format = desc.format;

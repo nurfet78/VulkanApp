@@ -52,7 +52,7 @@ namespace Renderer {
     // Comprehensive sky parameters
     struct SkyParams {
         // Time and sun/moon
-        float timeOfDay = 12.0f;              // 0-24 hours
+        float timeOfDay = 0.0f;              // 0-24 hours
         glm::vec3 sunDirection = glm::vec3(0, 1, 0);
         float sunIntensity = 15.0f;
         float sunAngularRadius = 0.00465f;    // Sun's angular radius in radians
@@ -66,13 +66,13 @@ namespace Renderer {
         glm::vec3 mieBeta = glm::vec3(21e-6f) * 0.8f;
 
         // Clouds
-        float cloudCoverage = 0.5f;           // 0-1
-        float cloudSpeed = 0.1f;              // Cloud animation speed
+        float cloudCoverage = 0.8f;           // 0-1
+        float cloudSpeed = 0.5f;              // Cloud animation speed
         float cloudScale = 1.0f;              // Cloud detail scale
         float cloudDensity = 0.5f;            // Cloud opacity
         float cloudAltitude = 2000.0f;        // Cloud layer height in meters
         float cloudThickness = 500.0f;        // Cloud layer thickness
-        int cloudOctaves = 4;                 // Noise octaves for cloud detail
+        int cloudOctaves = 6;                 // Noise octaves for cloud detail
         float cloudLacunarity = 2.3f;         // Fractal lacunarity
         float cloudGain = 0.5f;               // Fractal gain
 
@@ -104,6 +104,8 @@ namespace Renderer {
         float speed;
         float scale;
         int type; // 0: Cumulus, 1: Stratus, 2: Cirrus
+		float offset = 0.0f;           // Текущее смещение
+		float dynamicDensity = 0.5f;   // Динамическая плотность
     };
 
     // Performance metrics
@@ -118,22 +120,20 @@ namespace Renderer {
     };
 
     struct AtmosphereUBO {
-		alignas(16) glm::vec3 sunDirection;
-		float sunIntensity;
+		alignas(16) glm::vec3 sunDirection; // 0–12
+		alignas(4)  float sunIntensity;     // 12–16
 
-		alignas(16) glm::vec3 rayleighBeta;
-		float mieCoeff;
+		alignas(16) glm::vec3 rayleighBeta; // 16–28
+		alignas(16) glm::vec3 mieBeta;      // 32–44
+		alignas(4)  float mieG;             // 44–48
 
-		alignas(16) glm::vec3 mieBeta;
-		float mieG;
+		float turbidity;       // 48–52
+		float planetRadius;    // 52–56
+		float atmosphereRadius; // 56–60
+		float time;            // 60–64
 
-		float turbidity;
-		float planetRadius;
-		float atmosphereRadius;
-		float time;
-
-		alignas(16) glm::vec3 cameraPos;
-		float exposure;
+		alignas(16) glm::vec3 cameraPos; // 64–76
+		alignas(4)  float exposure;      // 76–80
     };
 
     struct CloudUBO {
@@ -151,7 +151,7 @@ namespace Renderer {
 		int octaves;                         // int octaves
 		float lacunarity;                    // float lacunarity
 		float gain;                          // float gain
-		float _pad;                          // padding для выравнивания до 16 байт
+        float animationOffset;
     };
 
     struct StarUBO {
@@ -240,14 +240,14 @@ namespace Renderer {
 
         // Update and queries
         void Update(float deltaTime);
-        glm::vec3 GetCurrentSkyColor(const glm::vec3& direction) const;
-        glm::vec3 GetAmbientLight() const;
         glm::vec3 GetSunDirection() const { return m_skyParams.sunDirection; }
         glm::vec3 GetMoonDirection() const { return -m_skyParams.sunDirection; }
 
         // Performance
         const SkyRenderStats& GetStats() const { return m_stats; }
         void EnableTemporalAccumulation(bool enable) { m_useTemporalAccumulation = enable; }
+
+        float TimeStringToFloat(const std::string& timeStr);
 
     private:
         // Pipeline creation
@@ -270,6 +270,8 @@ namespace Renderer {
         void CreateDescriptorSets();
         void CreateRenderTargets();
         void CreateLUTs();
+
+        void InitCloudeLayers();
 
         // Rendering passes
         void RenderAtmosphere(VkCommandBuffer cmd);
@@ -294,11 +296,6 @@ namespace Renderer {
         void GenerateCloudNoise(VkCommandBuffer cmd);
         void GenerateStarTexture(VkCommandBuffer cmd);
 
-        // Helpers
-        glm::vec3 CalculateRayleighScattering(const glm::vec3& rayDir) const;
-        glm::vec3 CalculateMieScattering(const glm::vec3& rayDir) const;
-        float CalculateMoonPhase() const;
-
         void CreateSamplers();
 
         template<typename T>
@@ -310,8 +307,6 @@ namespace Renderer {
                 VMA_MEMORY_USAGE_CPU_TO_GPU
             );
         }
-
-        float TimeStringToFloat(const std::string& timeStr);
 
         void TransitionImageToLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout newLayout);
         void TransitionAllStorageImagesToGeneral(VkCommandBuffer cmd);
@@ -416,8 +411,7 @@ namespace Renderer {
 
         // Animation
         float m_animationSpeed = 1.0f;
-        float m_currentTime = 0.0f;
-        float m_cloudAnimationTime = 0.0f;
+        float m_cloudAnimationTime = 1.0f;
         bool m_autoAnimate = false;
 
         bool m_needsCloudGeneration = false;
@@ -438,39 +432,4 @@ namespace Renderer {
         glm::mat4 m_currentView;
         glm::vec3 m_currentCameraPos;
     };
-
-    // Atmosphere computation helpers
-    class AtmosphereHelper {
-    public:
-        static glm::vec3 ComputeRayleighScattering(
-            const glm::vec3& rayOrigin,
-            const glm::vec3& rayDir,
-            float rayLength,
-            const glm::vec3& sunDir,
-            const glm::vec3& rayleighBeta,
-            int numSamples = 16);
-
-        static glm::vec3 ComputeMieScattering(
-            const glm::vec3& rayOrigin,
-            const glm::vec3& rayDir,
-            float rayLength,
-            const glm::vec3& sunDir,
-            const glm::vec3& mieBeta,
-            float g,
-            int numSamples = 8);
-
-        static float ComputeOpticalDepth(
-            const glm::vec3& rayOrigin,
-            const glm::vec3& rayDir,
-            float rayLength,
-            float planetRadius,
-            float atmosphereRadius = ATMOSPHERE_RADIUS,
-            int numSamples = 8);
-
-        static glm::vec3 PreethamSky(
-            const glm::vec3& rayDir,
-            const glm::vec3& sunDir,
-            float turbidity);
-    };
-
 } // namespace Renderer

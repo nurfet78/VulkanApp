@@ -5,7 +5,7 @@
 #include "staging_buffer_pool.h"
 
 #define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>  // Assume we have stb_image for texture loading
+#include "external/stb/stb_image.h"
 
 namespace RHI::Vulkan {
 

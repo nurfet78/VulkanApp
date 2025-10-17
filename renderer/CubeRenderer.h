@@ -51,6 +51,8 @@ namespace Renderer {
 		void Render(VkCommandBuffer cmd, VkImageView colorTarget, VkImageView depthTarget,
 			VkExtent2D extent, const glm::mat4& model);
 
+		void SetSkyboxForIBL(VkImageView skyboxView, VkSampler skyboxSampler);
+
 	private:
 		void CreateUniformBuffers();
 		void CreateDescriptorSets();
@@ -72,5 +74,8 @@ namespace Renderer {
 
 		RHI::Vulkan::Mesh* m_cubeMesh;
 		Material* m_material = nullptr;
+
+		VkImageView m_skyboxView;
+		VkSampler m_skyboxSampler;
 	};
 }

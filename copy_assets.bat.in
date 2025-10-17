@@ -1,0 +1,15 @@
+@echo off
+setlocal
+
+rem Первый аргумент (%1) - это имя конфигурации (Debug, Release)
+set CONFIG_NAME=%1
+
+robocopy "@SOURCE_ASSETS_DIR@\textures" "@CMAKE_BINARY_DIR@\%CONFIG_NAME%\assets\textures" *.* /E /NFL /NDL /NJH /NJS /nc /ns /np
+if %ERRORLEVEL% LSS 8 set ERRORLEVEL=0
+if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
+
+robocopy "@SOURCE_ASSETS_DIR@\models" "@CMAKE_BINARY_DIR@\%CONFIG_NAME%\assets\models" *.* /E /NFL /NDL /NJH /NJS /nc /ns /np
+if %ERRORLEVEL% LSS 8 set ERRORLEVEL=0
+if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
+
+exit /b 0

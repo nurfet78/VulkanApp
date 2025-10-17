@@ -26,12 +26,14 @@ set(SRC
     core/time_utils.cpp
     core/window.cpp
     core/core_context.cpp
+    core/hdri_converter.cpp
     physics/collider.cpp
     renderer/material_system.cpp
     renderer/shadow_mapper.cpp
     renderer/sky_renderer.cpp
     renderer/triangle_renderer.cpp
     renderer/CubeRenderer.cpp
+    renderer/skybox_renderer.cpp
     rhi/vulkan/async_resource_loader.cpp
     rhi/vulkan/command_buffer_optimizer.cpp
     rhi/vulkan/command_pool.cpp
@@ -90,12 +92,38 @@ target_link_directories(VulkanSandbox PRIVATE
 )
 target_link_libraries(VulkanSandbox PRIVATE Vulkan::Vulkan glfw3 user32 gdi32 shell32)
 
-# Копирование всех шейдеров рекурсивно
-file(GLOB_RECURSE SHADERS "${CMAKE_SOURCE_DIR}/shaders/*")
-foreach(shader ${SHADERS})
-    file(RELATIVE_PATH relPath ${CMAKE_SOURCE_DIR}/shaders ${shader})
-    configure_file(${shader} ${CMAKE_BINARY_DIR}/shaders/${relPath} COPYONLY)
-endforeach()
+# --- НАЧАЛО БЛОКА КОПИРОВАНИЯ АССЕТОВ (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ) ---
+
+set(SOURCE_ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+
+# --- 1. Явное создание папок для текстур и моделей ---
+# $<TARGET_FILE_DIR:...> это правильный "генератор выражений" для получения пути вывода.
+# CMake заменит его на C:/.../build/Debug или C:/.../build/Release во время сборки.
+add_custom_command(
+    TARGET VulkanSandbox PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:VulkanSandbox>/assets/textures"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:VulkanSandbox>/assets/models"
+    COMMENT "Creating textures and models output directories"
+)
+
+# --- 2. Копирование текстур и моделей через сгенерированный скрипт ---
+# Генерируем .bat скрипт из нашего шаблона.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/copy_assets.bat.in"
+    "${CMAKE_BINARY_DIR}/copy_assets.bat"
+    @ONLY
+)
+
+# Вызываем наш скрипт и передаем ему имя конфигурации с помощью $<CONFIG>
+# $<CONFIG> - это генератор выражений, который превратится в "Debug" или "Release".
+add_custom_command(
+    TARGET VulkanSandbox PRE_BUILD
+    COMMAND "${CMAKE_BINARY_DIR}/copy_assets.bat" "$<CONFIG>"
+    COMMENT "Syncing textures and models"
+    VERBATIM
+)
+
+# --- КОНЕЦ БЛОКА КОПИРОВАНИЯ АССЕТОВ ---
 
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT VulkanSandbox)
 

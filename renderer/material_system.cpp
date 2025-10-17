@@ -284,16 +284,24 @@ MaterialSystem::~MaterialSystem() {
 }
 
 void MaterialSystem::CreateSceneDescriptorLayout() {
-	VkDescriptorSetLayoutBinding uboBinding{};
-	uboBinding.binding = 0;
-	uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	uboBinding.descriptorCount = 1;
-	uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	std::vector<VkDescriptorSetLayoutBinding> bindings(2); // хглемемн: РЕОЕПЭ 2 binding
+
+	// Binding 0: Scene UBO (ЙЮЙ АШКН)
+	bindings[0].binding = 0;
+	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	bindings[0].descriptorCount = 1;
+	bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	// Binding 1: Skybox cubemap
+	bindings[1].binding = 1;
+	bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[1].descriptorCount = 1;
+	bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	VkDescriptorSetLayoutCreateInfo layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	layoutInfo.bindingCount = 1;
-	layoutInfo.pBindings = &uboBinding;
+	layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size()); // хглемемн
+	layoutInfo.pBindings = bindings.data(); // хглемемн
 
 	if (vkCreateDescriptorSetLayout(m_device->GetDevice(), &layoutInfo, nullptr,
 		&m_sceneDescriptorLayout) != VK_SUCCESS) {

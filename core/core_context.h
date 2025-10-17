@@ -1,8 +1,9 @@
 #pragma once
 
+#include "rhi/vulkan/command_pool.h"
+
 namespace RHI::Vulkan {
     class Device;
-    class CommandPoolManager;
 }
 
 namespace Core {

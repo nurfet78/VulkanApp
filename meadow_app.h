@@ -1,11 +1,9 @@
-// meadow_app.h - FIXED VERSION
 #pragma once
 
 #include "core/application.h"
 #include <memory>
 #include <array>
 
-// Forward declarations
 namespace RHI::Vulkan {
     class Device;
     class Swapchain;
@@ -17,10 +15,9 @@ namespace RHI::Vulkan {
 
 
 namespace Renderer {
-    class TriangleRenderer;
     class CubeRenderer;
     class MaterialSystem;
-    class SkyRenderer;
+    class SkyboxRenderer;
 }
 
 namespace Core {
@@ -79,12 +76,11 @@ private:
     std::unique_ptr<RHI::Vulkan::Swapchain> m_swapchain;
     std::unique_ptr<RHI::Vulkan::CommandPoolManager> m_commandPoolManager;
     std::unique_ptr<RHI::Vulkan::ResourceManager> m_resourceManager;
-    std::unique_ptr<Renderer::TriangleRenderer> m_trianglePipeline;
     std::unique_ptr<Core::CoreContext> m_coreContext;
 
     std::unique_ptr<Renderer::MaterialSystem> m_materialSystem;
     std::unique_ptr<Renderer::CubeRenderer> m_cubeRenderer;
-    std::unique_ptr<Renderer::SkyRenderer> m_skyRenderer;
+    std::unique_ptr<Renderer::SkyboxRenderer> m_skyboxRenderer;
     std::unique_ptr<RHI::Vulkan::Image> m_depthBuffer;
     std::unique_ptr<Scene::Camera> m_camera;
     std::unique_ptr<Scene::Transform> m_cameraTransform;

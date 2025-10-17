@@ -38,11 +38,8 @@ namespace Renderer {
         , m_colorFormat(colorFormat) 
         , m_depthFormat(depthFormat) {
 
-        // Initialize default cloud layers
-        m_cloudLayers.push_back({ 2000.0f, 500.0f, 0.5f, 0.1f, 1.0f, 0 }); // Cumulus
-        m_cloudLayers.push_back({ 8000.0f, 200.0f, 0.3f, 0.2f, 2.0f, 2 }); // Cirrus
-
         SetQualityProfile(Renderer::SkyQualityProfile::High);
+        //SetAutoAnimate(true);
 
         // Create resources
         CreateUniformBuffers();
@@ -61,25 +58,26 @@ namespace Renderer {
 		CreateSunTexturePipeline();   
 		CreateSunBillboardPipeline();
 
-        //// Create descriptor sets
+        // Create descriptor sets
         CreateDescriptorSets();
 
         // Initial setup
-       /* float t1 = TimeStringToFloat("23:30");
-        SetTimeOfDay(TimeStringToFloat("12:00"));*/
-        UpdateAtmosphere();
+        SetAnimationSpeed(0.5f);
+        SetTimeOfDay(TimeStringToFloat("12:00"));
+		InitCloudeLayers();
+        UpdateUniformBuffers();
 
         m_needsCloudGeneration = true;
         m_needsLUTGeneration = true;
         m_needsStarGeneration = true;
 
 		// Генерируем процедурный контент
-		VkCommandBuffer cmd = context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
+		VkCommandBuffer cmd = m_context->GetCommandPoolManager()->BeginSingleTimeCommandsCompute();
 		GenerateAtmosphereLUT(cmd);
 		GenerateCloudNoise(cmd);
 		GenerateStarTexture(cmd);
         GenerateSunTexture(cmd);
-		context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
+		m_context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
 
 		// Переводим placeholder текстуры через существующую функцию
 		// Она использует отдельный command buffer на graphics queue
@@ -96,6 +94,9 @@ namespace Renderer {
 		);
 
         InitializeRenderTargetLayouts();
+
+		m_cloudLayers.push_back({ 2000.0f, 500.0f, 0.5f, 0.1f, 1.0f, 0 }); // Cumulus
+		m_cloudLayers.push_back({ 8000.0f, 200.0f, 0.3f, 0.2f, 2.0f, 2 }); // Cirrus
     }
 
     SkyRenderer::~SkyRenderer() {
@@ -195,7 +196,7 @@ namespace Renderer {
         const glm::vec3& cameraPos) {
 
 		if (m_skyBuffer && (m_currentExtent.width != extent.width ||
-			m_currentExtent.height != extent.height)) {
+			                m_currentExtent.height != extent.height)) {
 
 			vkDeviceWaitIdle(m_device->GetDevice());
 
@@ -217,7 +218,7 @@ namespace Renderer {
 		m_currentCameraPos = cameraPos;
 
 		// Update uniform buffers
-		UpdateUniformBuffers();
+		//UpdateUniformBuffers();
 
 		auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -239,7 +240,7 @@ namespace Renderer {
 		m_stats.starPassMs = std::chrono::duration<float, std::milli>(starsTime - atmosphereTime).count();
 
 		if (m_skyParams.cloudCoverage > 0.01f) {
-			 //RenderClouds(cmd);
+			 RenderClouds(cmd);
 		}
 
 		auto cloudsTime = std::chrono::high_resolution_clock::now();
@@ -337,7 +338,7 @@ namespace Renderer {
 
 		pushConstants.invViewProj = glm::inverse(m_currentProjection * m_currentView);
 		pushConstants.cameraPos = m_currentCameraPos;
-		pushConstants.time = m_currentTime;
+		pushConstants.time = m_skyParams.timeOfDay;
 
 		vkCmdPushConstants(cmd, m_atmospherePipeline->GetLayout(),
 			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -613,7 +614,7 @@ namespace Renderer {
 		starsPush.invViewProj = glm::inverse(m_currentProjection * m_currentView);
 		starsPush.intensity = m_skyParams.starIntensity * (1.0f - dayNightBlend);
 		starsPush.twinkle = 0.3f;
-		starsPush.time = m_currentTime;
+		starsPush.time = m_skyParams.timeOfDay;
 		starsPush.nightBlend = 1.0f - dayNightBlend;
 
 		vkCmdPushConstants(cmd, m_starsPipeline->GetLayout(),
@@ -694,7 +695,7 @@ namespace Renderer {
 		postPush.exposure = m_skyParams.exposure;
 		postPush.bloomThreshold = m_skyParams.bloomThreshold;
 		postPush.bloomIntensity = m_skyParams.bloomIntensity;
-		postPush.time = m_currentTime;
+		postPush.time = m_skyParams.timeOfDay;
 
 		vkCmdPushConstants(cmd, m_postProcessPipeline->GetLayout(),
 			VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -707,40 +708,78 @@ namespace Renderer {
     }
 
     void SkyRenderer::Update(float deltaTime) {
-        if (m_autoAnimate) {
-            m_currentTime += deltaTime * m_animationSpeed;
+		deltaTime = glm::min(deltaTime, 0.1f);
+		if (m_autoAnimate) {
+			float hoursPerSecond = 0.5f * m_animationSpeed;
+			SetTimeOfDay(fmod(m_skyParams.timeOfDay + deltaTime * hoursPerSecond, 24.0f));
+		}
 
-            // Update time of day
-            float hoursPerSecond = 0.5f * m_animationSpeed;
-            //SetTimeOfDay(fmod(m_skyParams.timeOfDay + deltaTime * hoursPerSecond, 24.0f));
-        }
+		// Update cloud animation
+		m_cloudAnimationTime += deltaTime * m_skyParams.cloudSpeed;
 
-        // Update cloud animation
-        m_cloudAnimationTime += deltaTime * m_skyParams.cloudSpeed;
+		// Обновляем звёзды только ночью
+		float dayNightBlend = glm::smoothstep(0.3f, 0.7f,
+			glm::dot(m_skyParams.sunDirection, glm::vec3(0, 1, 0)));
+		if (dayNightBlend < 0.9f) {
+			UpdateStarField();
+		}
 
-        // Update uniform buffers
-        UpdateUniformBuffers();
+		UpdateCloudAnimation(deltaTime);
+
+		// Update uniform buffers
+		UpdateUniformBuffers();
     }
 
     void SkyRenderer::SetTimeOfDay(float hours) {
         m_skyParams.timeOfDay = fmod(hours, 24.0f);
 
-        printf("SetTimeOfDay: %.2f hours\n", m_skyParams.timeOfDay);
-
         UpdateSunMoonPositions();
         UpdateAtmosphere();
-
-		printf("After update - Sun dir: (%.2f, %.2f, %.2f)\n",
-			m_skyParams.sunDirection.x,
-			m_skyParams.sunDirection.y,
-			m_skyParams.sunDirection.z);
     }
+
+	void SkyRenderer::UpdateStarField() {
+		// Обновление параметров звёзд
+		StarUBO starData{};
+
+		// Интенсивность зависит от времени суток
+		float dayNightBlend = glm::smoothstep(0.3f, 0.7f,
+			glm::dot(m_skyParams.sunDirection, glm::vec3(0, 1, 0)));
+
+		starData.intensity = m_skyParams.starIntensity * (1.0f - dayNightBlend);
+		starData.twinkle = 0.3f + 0.2f * sin(m_skyParams.timeOfDay * 2.0f); // Мерцание
+		starData.milkyWayIntensity = m_skyParams.milkyWayIntensity * (1.0f - dayNightBlend);
+		starData.time = m_skyParams.timeOfDay;
+
+		m_starUBO->Upload(&starData, sizeof(starData));
+	}
+
+	void SkyRenderer::UpdateCloudAnimation(float deltaTime) {
+		// Обновляем каждый слой облаков
+		for (auto& layer : m_cloudLayers) {
+			// Каждый слой движется с собственной скоростью
+			layer.offset += deltaTime * layer.speed;
+
+			// Ограничиваем offset, чтобы не было overflow
+			if (layer.offset > 1000.0f) {
+				layer.offset = fmod(layer.offset, 1000.0f);
+			}
+
+			// Волновое изменение плотности
+			float densityWave = sin(m_cloudAnimationTime * 0.05f + layer.altitude * 0.001f);
+			layer.dynamicDensity = layer.coverage * (1.0f + densityWave * 0.2f);
+
+			// Турбулентность
+			float turbulence = sin(m_cloudAnimationTime * 0.1f + layer.type * 1.5f) *
+				cos(m_cloudAnimationTime * 0.07f);
+			layer.offset += turbulence * 0.1f * layer.speed;
+		}
+	}
 
     void SkyRenderer::UpdateSunMoonPositions() {
 		// Положение солнца: Y = вверх
         float sunAngle = (m_skyParams.timeOfDay / 24.0f) * 2.0f * glm::pi<float>() - glm::half_pi<float>();
 
-		float azimuth = glm::radians(-90.0f); // восток
+		float azimuth = glm::radians<float>(-90.0f); // восток
 		float elevation = sunAngle;
 
 		m_skyParams.sunDirection = glm::normalize(glm::vec3(
@@ -751,27 +790,33 @@ namespace Renderer {
 
 		// Интенсивность солнца растет с высотой
 		float sunElevation = glm::max(m_skyParams.sunDirection.y, 0.0f);
-		m_skyParams.sunIntensity = sunElevation * 50.0f; // усиление для наглядности
+		m_skyParams.sunIntensity = sunElevation * 20.0f; // усиление для наглядности
     }
 
     void SkyRenderer::UpdateAtmosphere() {
   
-        float sunElevation = m_skyParams.sunDirection.y;
+		float sunElevation = m_skyParams.sunDirection.y;
 
-        // Динамическая turbidity для sunrise/sunset
-        if (abs(sunElevation) < 0.3f) {
-			m_skyParams.turbidity = glm::mix(2.0f, 6.0f, 1.0f - abs(sunElevation) / 0.3f);
-			m_skyParams.mieCoeff = glm::mix(1.2f, 2.5f, 1.0f - abs(sunElevation) / 0.3f);
-        }
-        else {
-            // Полдень - чистое небо
+		// Учитываем что солнце может быть под горизонтом
+		if (sunElevation < 0.0f) {
+			// НОЧЬ - солнце под горизонтом
+			m_skyParams.turbidity = 1.5f; // Чистая ночная атмосфера
+			m_skyParams.mieCoeff = 0.3f;
+			m_skyParams.mieBeta = glm::vec3(21e-6f) * 0.2f;
+		}
+		else if (abs(sunElevation) < 0.3f) {
+			// ЗАКАТ/РАССВЕТ
+			float sunsetFactor = 1.0f - sunElevation / 0.3f;
+			m_skyParams.turbidity = glm::mix(2.0f, 4.0f, sunsetFactor);
+			m_skyParams.mieCoeff = glm::mix(0.8f, 1.5f, sunsetFactor);
+			m_skyParams.mieBeta = glm::vec3(21e-6f) * (0.8f + sunsetFactor * 0.5f);
+		}
+		else {
+			// ДЕНЬ
 			m_skyParams.turbidity = 2.0f;
-            m_skyParams.mieCoeff = 1.2f;
-        }
-
-		// Увеличиваем Mie коэффициент когда солнце низко для красивого ореола
-		float horizonFactor = 1.0f - abs(sunElevation);
-		m_skyParams.mieBeta = glm::vec3(21e-6f) * (1.0f + horizonFactor * 1.5f);
+			m_skyParams.mieCoeff = 0.8f;
+			m_skyParams.mieBeta = glm::vec3(21e-6f) * 0.8f;
+		}
     }
 
     void SkyRenderer::SetQualityProfile(SkyQualityProfile profile) {
@@ -796,172 +841,50 @@ namespace Renderer {
         //m_context->GetCommandPoolManager()->EndSingleTimeCommandsCompute(cmd);
     }
 
-    glm::vec3 SkyRenderer::GetCurrentSkyColor(const glm::vec3& direction) const {
-        // Compute sky color for a given direction
-        glm::vec3 color = CalculateRayleighScattering(direction);
-        color += CalculateMieScattering(direction);
+	void SkyRenderer::AddCloudLayer(const CloudLayer& layer) {
+		m_cloudLayers.push_back(layer);
+	}
 
-        // Add stars if night
-        float dayNightBlend = glm::smoothstep(0.3f, 0.7f,
-            glm::dot(m_skyParams.sunDirection, glm::vec3(0, 1, 0)));
-        if (dayNightBlend < 0.9f) {
-            // Simple star contribution
-            float starNoise = glm::fract(sin(glm::dot(direction, glm::vec3(12.9898f, 78.233f, 45.164f))) * 43758.5453f);
-            if (starNoise > 0.99f) {
-                color += glm::vec3(1.0f) * m_skyParams.starIntensity * (1.0f - dayNightBlend);
-            }
-        }
+	void SkyRenderer::ClearCloudLayers() {
+		m_cloudLayers.clear();
+	}
 
-        return color;
-    }
+	void SkyRenderer::SetCloudParameters(float coverage, float speed, float scale) {
+		// Обновляем все слои
+		for (auto& layer : m_cloudLayers) {
+			layer.coverage = coverage;
+			layer.speed = speed;
+			layer.scale = scale;
+		}
+	}
 
-    glm::vec3 SkyRenderer::GetAmbientLight() const {
-        // Compute ambient light from sky
-        glm::vec3 ambient = glm::vec3(0.0f);
+    void SkyRenderer::InitCloudeLayers() {
+		// Инициализируем облачные слои
+		m_cloudLayers.clear();
 
-        // Sample sky in multiple directions
-        const int samples = 16;
-        for (int i = 0; i < samples; ++i) {
-            float theta = (float(i) / float(samples)) * 2.0f * static_cast<float>(std::numbers::pi);
-            for (int j = 0; j < samples / 2; ++j) {
-                float phi = (float(j) / float(samples / 2)) * static_cast<float>(std::numbers::pi);
+		// Cumulus - низкие пушистые облака
+		CloudLayer cumulus{};
+		cumulus.altitude = 2000.0f;
+		cumulus.thickness = 500.0f;
+		cumulus.coverage = 0.5f;
+		cumulus.speed = 0.1f;
+		cumulus.scale = 1.0f;
+		cumulus.type = 0;
+		cumulus.offset = 0.0f;
+		cumulus.dynamicDensity = cumulus.coverage;
+		m_cloudLayers.push_back(cumulus);
 
-                glm::vec3 dir(
-                    sin(phi) * cos(theta),
-                    cos(phi),
-                    sin(phi) * sin(theta)
-                );
-
-                ambient += GetCurrentSkyColor(dir);
-            }
-        }
-
-        ambient /= float(samples * samples / 2);
-        return ambient * m_skyParams.ambientLightMultiplier;
-    }
-
-    glm::vec3 SkyRenderer::CalculateRayleighScattering(const glm::vec3& rayDir) const {
-        return AtmosphereHelper::ComputeRayleighScattering(
-            glm::vec3(0, EARTH_RADIUS + 1000.0f, 0),  // Camera at 1km altitude
-            rayDir,
-            ATMOSPHERE_HEIGHT,
-            m_skyParams.sunDirection,
-            m_skyParams.rayleighBeta * m_skyParams.rayleighCoeff,
-            16
-        );
-    }
-
-    glm::vec3 SkyRenderer::CalculateMieScattering(const glm::vec3& rayDir) const {
-        return AtmosphereHelper::ComputeMieScattering(
-            glm::vec3(0, EARTH_RADIUS + 1000.0f, 0),
-            rayDir,
-            ATMOSPHERE_HEIGHT,
-            m_skyParams.sunDirection,
-            m_skyParams.mieBeta * m_skyParams.mieCoeff,
-            m_skyParams.mieG,
-            8
-        );
-    }
-
-    // AtmosphereHelper implementation
-    glm::vec3 AtmosphereHelper::ComputeRayleighScattering(
-        const glm::vec3& rayOrigin,
-        const glm::vec3& rayDir,
-        float rayLength,
-        const glm::vec3& sunDir,
-        const glm::vec3& rayleighBeta,
-        int numSamples) {
-
-        float stepSize = rayLength / float(numSamples);
-        glm::vec3 scatter = glm::vec3(0.0f);
-        float opticalDepth = 0.0f;
-
-        for (int i = 0; i < numSamples; ++i) {
-            float t = (float(i) + 0.5f) * stepSize;
-            glm::vec3 samplePos = rayOrigin + rayDir * t;
-
-            float height = glm::length(samplePos) - EARTH_RADIUS;
-            float density = exp(-height / 8000.0f); // Scale height of 8km
-
-            opticalDepth += density * stepSize;
-
-            // Compute sun optical depth
-            float sunOpticalDepth = ComputeOpticalDepth(
-                samplePos, sunDir, ATMOSPHERE_HEIGHT,
-                EARTH_RADIUS, ATMOSPHERE_RADIUS, 8
-            );
-
-            glm::vec3 transmission = exp(-(rayleighBeta * (opticalDepth + sunOpticalDepth)));
-            scatter += transmission * density * stepSize;
-        }
-
-        // Rayleigh phase function
-        float cosTheta = glm::dot(rayDir, sunDir);
-        float phase = 3.0f / (16.0f * static_cast<float>(std::numbers::pi)) * (1.0f + cosTheta * cosTheta);
-
-        return scatter * rayleighBeta * phase * 20.0f; // Intensity scale
-    }
-
-    glm::vec3 AtmosphereHelper::ComputeMieScattering(
-        const glm::vec3& rayOrigin,
-        const glm::vec3& rayDir,
-        float rayLength,
-        const glm::vec3& sunDir,
-        const glm::vec3& mieBeta,
-        float g,
-        int numSamples) {
-
-        float stepSize = rayLength / float(numSamples);
-        glm::vec3 scatter = glm::vec3(0.0f);
-        float opticalDepth = 0.0f;
-
-        for (int i = 0; i < numSamples; ++i) {
-            float t = (float(i) + 0.5f) * stepSize;
-            glm::vec3 samplePos = rayOrigin + rayDir * t;
-
-            float height = glm::length(samplePos) - EARTH_RADIUS;
-            float density = exp(-height / 1200.0f); // Scale height of 1.2km for Mie
-
-            opticalDepth += density * stepSize;
-
-            float sunOpticalDepth = ComputeOpticalDepth(
-                samplePos, sunDir, ATMOSPHERE_HEIGHT,
-                EARTH_RADIUS, ATMOSPHERE_RADIUS, 8
-            );
-
-            glm::vec3 transmission = exp(-(mieBeta * (opticalDepth + sunOpticalDepth)));
-            scatter += transmission * density * stepSize;
-        }
-
-        // Henyey-Greenstein phase function
-        float cosTheta = glm::dot(rayDir, sunDir);
-        float phase = (1.0f - g * g) / (4.0f * static_cast<float>(std::numbers::pi) * pow(1.0f + g * g - 2.0f * g * cosTheta, 1.5f));
-
-        return scatter * mieBeta * phase * 20.0f;
-    }
-
-    float AtmosphereHelper::ComputeOpticalDepth(
-        const glm::vec3& rayOrigin,
-        const glm::vec3& rayDir,
-        float rayLength,
-        float planetRadius,
-        float atmosphereRadius,
-        int numSamples) {
-
-        float stepSize = rayLength / float(numSamples);
-        float opticalDepth = 0.0f;
-
-        for (int i = 0; i < numSamples; ++i) {
-            float t = (float(i) + 0.5f) * stepSize;
-            glm::vec3 samplePos = rayOrigin + rayDir * t;
-
-            float height = glm::length(samplePos) - planetRadius;
-            float density = exp(-height / 8000.0f);
-
-            opticalDepth += density * stepSize;
-        }
-
-        return opticalDepth;
+		// Cirrus - высокие перистые облака 
+		// CloudLayer cirrus{};
+		// cirrus.altitude = 8000.0f;
+		// cirrus.thickness = 200.0f;
+		// cirrus.coverage = 0.3f;
+		// cirrus.speed = 0.2f;
+		// cirrus.scale = 2.0f;
+		// cirrus.type = 2;
+		// cirrus.offset = 0.0f;
+		// cirrus.dynamicDensity = cirrus.coverage;
+		// m_cloudLayers.push_back(cirrus);
     }
 
     void SkyRenderer::CreateUniformBuffers() {
@@ -972,7 +895,7 @@ namespace Renderer {
 
     void SkyRenderer::CreateTextures() {
 		const uint32_t STAR_RESOLUTION = 2048;
-		const uint32_t CLOUD_NOISE_RESOLUTION = 128;  // 3D текстуры дорогие, держим разумный размер
+		const uint32_t CLOUD_NOISE_RESOLUTION = 256;  // 3D текстуры дорогие, держим разумный размер
 
 		// === STORAGE IMAGES (будут заполняться compute шейдерами) ===
 
@@ -1004,7 +927,7 @@ namespace Renderer {
 		RHI::Vulkan::ImageDesc cloudNoiseDesc{};
 		cloudNoiseDesc.width = CLOUD_NOISE_RESOLUTION;
 		cloudNoiseDesc.height = CLOUD_NOISE_RESOLUTION;
-		cloudNoiseDesc.depth = CLOUD_NOISE_RESOLUTION / 4; // 3D depth
+		cloudNoiseDesc.depth = CLOUD_NOISE_RESOLUTION / 2; // 3D depth
 		cloudNoiseDesc.arrayLayers = 1;    // для 3D — всегда 1
 		cloudNoiseDesc.mipLevels = 1;    // без мип-уровней
 		cloudNoiseDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -1028,7 +951,7 @@ namespace Renderer {
 		RHI::Vulkan::ImageDesc cloudDetailNoiseDesc{};
 		cloudDetailNoiseDesc.width = CLOUD_NOISE_RESOLUTION / 2;
 		cloudDetailNoiseDesc.height = CLOUD_NOISE_RESOLUTION / 2;
-		cloudDetailNoiseDesc.depth = CLOUD_NOISE_RESOLUTION / 8; // глубина для 3D
+		cloudDetailNoiseDesc.depth = CLOUD_NOISE_RESOLUTION / 4; // глубина для 3D
 		cloudDetailNoiseDesc.arrayLayers = 1;    // для 3D всегда 1
 		cloudDetailNoiseDesc.mipLevels = 1;    // без мип-уровней
 		cloudDetailNoiseDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -1303,21 +1226,38 @@ namespace Renderer {
         // Update cloud UBO
 		CloudUBO cloudData{};
 
-		cloudData.coverage = glm::vec3(m_skyParams.cloudCoverage);
-		cloudData.speed = m_skyParams.cloudSpeed;
+		if (!m_cloudLayers.empty()) {
+			// Используем первый слой (основной)
+			const auto& layer = m_cloudLayers[0];
 
-		cloudData.windDirection = glm::vec3(1.0f, 0.0f, 0.0f); 
-		cloudData.scale = m_skyParams.cloudScale;
-
-		cloudData.density = m_skyParams.cloudDensity;
-		cloudData.altitude = m_skyParams.cloudAltitude;
-		cloudData.thickness = m_skyParams.cloudThickness;
-		cloudData.time = m_skyParams.timeOfDay; // или глобальное время, если нужно
-
-		cloudData.octaves = m_skyParams.cloudOctaves;
-		cloudData.lacunarity = m_skyParams.cloudLacunarity;
-		cloudData.gain = m_skyParams.cloudGain;
-		cloudData._pad = 0.0f;
+			cloudData.coverage = glm::vec3(layer.dynamicDensity);
+			cloudData.speed = layer.speed;
+			cloudData.windDirection = glm::vec3(1.0f, 0.0f, 0.3f);
+			cloudData.scale = layer.scale;
+			cloudData.density = layer.dynamicDensity; // Из слоя, а не из m_skyParams
+			cloudData.altitude = layer.altitude;
+			cloudData.thickness = layer.thickness;
+			cloudData.time = m_cloudAnimationTime;
+			cloudData.octaves = m_skyParams.cloudOctaves;
+			cloudData.lacunarity = m_skyParams.cloudLacunarity;
+			cloudData.gain = m_skyParams.cloudGain;
+			cloudData.animationOffset = layer.offset;
+		}
+		else {
+			// Fallback - используем m_skyParams если слоёв нет
+			cloudData.coverage = glm::vec3(m_skyParams.cloudCoverage);
+			cloudData.speed = m_skyParams.cloudSpeed;
+			cloudData.windDirection = glm::vec3(1.0f, 0.0f, 0.3f);
+			cloudData.scale = m_skyParams.cloudScale;
+			cloudData.density = m_skyParams.cloudDensity;
+			cloudData.altitude = m_skyParams.cloudAltitude;
+			cloudData.thickness = m_skyParams.cloudThickness;
+			cloudData.time = m_cloudAnimationTime;
+			cloudData.octaves = m_skyParams.cloudOctaves;
+			cloudData.lacunarity = m_skyParams.cloudLacunarity;
+			cloudData.gain = m_skyParams.cloudGain;
+			cloudData.animationOffset = 0.0f;
+		}
 
 		m_cloudUBO->Upload(&cloudData, sizeof(cloudData));
     }
@@ -1364,7 +1304,7 @@ namespace Renderer {
         pushConstants.octaves = m_skyParams.cloudOctaves;    // Или ваши значения
         pushConstants.lacunarity = 2.0f;
         pushConstants.gain = 0.5f;
-        pushConstants.scale = static_cast<float>(CLOUD_NOISE_RESOLUTION);      // Например, из настроек качества
+        pushConstants.scale = 5.0f;      // Например, из настроек качества
 
         vkCmdPushConstants(
             cmd,

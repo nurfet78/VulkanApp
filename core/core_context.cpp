@@ -1,6 +1,5 @@
 #include "core_context.h"
 #include "rhi/vulkan/device.h"
-#include "rhi/vulkan/command_pool.h"
 
 namespace Core {
 
